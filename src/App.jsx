@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Home, PlusSquare, Search, User, Bell, LogOut } from 'lucide-react'; 
+import { Home, PlusSquare, Search, User, Bell, LogOut, MessageCircle } from 'lucide-react'; 
 import { db, auth } from './firebase'; 
 import { collection, query, where, onSnapshot } from 'firebase/firestore'; 
 import { signOut } from 'firebase/auth';
@@ -12,9 +12,10 @@ import PostShayari from './components/PostShayari';
 import Explore from './components/Explore';
 import Login from './components/Login';
 import ProfilePage from './components/ProfilePage';
-import Notifications from './components/Notifications';
+import Notifications from './components/Notifications'; // <--- IMPORTED NOTIFICATIONS
 import SinglePostView from './components/SinglePostView'; 
 import SettingsModal from './components/SettingsModal';
+import ChatPage from './components/ChatPage'; 
 
 // --- ANIMATION VARIANTS ---
 const pageVariants = {
@@ -36,6 +37,7 @@ function App() {
   // Navigation State
   const [viewingProfile, setViewingProfile] = useState(localStorage.getItem('shayari_last_profile') || null); 
   const [viewingPostId, setViewingPostId] = useState(null);
+  const [activeChatId, setActiveChatId] = useState(null); 
   
   // History Stack
   const [history, setHistory] = useState([]);
@@ -50,14 +52,13 @@ function App() {
     if (viewingProfile) localStorage.setItem('shayari_last_profile', viewingProfile);
   }, [view, viewingProfile]);
 
-  // --- PREVENT SCROLL RESTORATION ON REFRESH ---
   useEffect(() => {
     if ('scrollRestoration' in window.history) {
       window.history.scrollRestoration = 'manual';
     }
   }, []);
 
-  // --- NOTIFICATIONS ---
+  // --- NOTIFICATIONS CHECKER ---
   useEffect(() => {
     if (!currentUser) return;
     const q = query(
@@ -73,7 +74,7 @@ function App() {
 
   // --- HANDLERS ---
   const pushToHistory = () => {
-    setHistory(prev => [...prev, { view, viewingProfile, viewingPostId }]);
+    setHistory(prev => [...prev, { view, viewingProfile, viewingPostId, activeChatId }]);
   };
 
   const handleBack = () => {
@@ -81,6 +82,7 @@ function App() {
       const lastState = history[history.length - 1];
       setViewingProfile(lastState.viewingProfile);
       setViewingPostId(lastState.viewingPostId);
+      setActiveChatId(lastState.activeChatId);
       setView(lastState.view);
       setHistory(prev => prev.slice(0, -1));
     } else {
@@ -100,6 +102,21 @@ function App() {
     pushToHistory(); 
     setViewingPostId(postId);
     setView("singlePost");
+    window.scrollTo(0, 0);
+  };
+
+  const handleOpenChat = (chatId = null) => {
+    pushToHistory();
+    setActiveChatId(chatId);
+    setView("chat");
+    window.scrollTo(0, 0);
+  };
+
+  // --- NEW: HANDLE OPEN NOTIFICATIONS ---
+  const handleOpenNotifications = () => {
+    if (view === 'notifications') return;
+    pushToHistory();
+    setView("notifications");
     window.scrollTo(0, 0);
   };
 
@@ -160,7 +177,7 @@ function App() {
       </div>
 
       {/* --- HEADER (FULL WIDTH) --- */}
-      {view !== 'singlePost' && (
+      {view !== 'singlePost' && view !== 'chat' && (
         <motion.div 
           initial={{ y: -50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
@@ -169,13 +186,12 @@ function App() {
           {/* Main Navbar Container */}
           <div className="w-full px-6 md:px-10 py-2 flex justify-between items-center">
             
-            {/* 1. Left: Logo Image Only (BIGGER NOW) */}
+            {/* 1. Left: Logo Image Only */}
             <div className="flex items-center cursor-pointer" onClick={() => handleTabChange('home')}>
                 <motion.img 
                   whileHover={{ scale: 1.05 }}
                   src="/logo.png" 
                   alt="Logo" 
-                  // CHANGED: Increased height to h-16 (mobile) and h-20 (desktop)
                   className="h-16 md:h-20 w-auto object-contain drop-shadow-sm" 
                 />
             </div>
@@ -185,21 +201,32 @@ function App() {
                <DesktopNavLink icon={Home} label="Home" isActive={view === 'home'} onClick={() => handleTabChange("home")} />
                <DesktopNavLink icon={Search} label="Explore" isActive={view === 'explore'} onClick={() => handleTabChange("explore")} />
                <DesktopNavLink icon={PlusSquare} label="Create" isActive={view === 'post'} onClick={() => handleTabChange("post")} />
+               <DesktopNavLink icon={MessageCircle} label="Messages" isActive={view === 'chat'} onClick={() => handleOpenChat(null)} />
             </div>
 
             {/* 3. Right: Bell, Avatar, Logout */}
             <div className="flex gap-4 items-center">
-              {/* Notification Bell */}
+              
+              {/* Mobile Message Icon */}
               <motion.button 
                 whileTap={{ scale: 0.9 }}
-                onClick={() => setShowSettings(true)}
-                className={`p-2.5 rounded-full transition relative hover:bg-gray-100 text-gray-600 border border-transparent hover:border-gray-200`}
+                onClick={() => handleOpenChat(null)}
+                className="md:hidden p-2.5 rounded-full hover:bg-gray-100 text-gray-600"
+              >
+                 <MessageCircle size={22} />
+              </motion.button>
+
+              {/* Notification Bell (NOW OPENS NOTIFICATIONS PAGE) */}
+              <motion.button 
+                whileTap={{ scale: 0.9 }}
+                onClick={handleOpenNotifications} 
+                className={`p-2.5 rounded-full transition relative hover:bg-gray-100 ${view === 'notifications' ? 'bg-gray-100 text-black' : 'text-gray-600'} border border-transparent hover:border-gray-200`}
               >
                 <Bell size={22} />
                 {hasUnread && <span className="absolute top-2 right-2.5 w-2 h-2 bg-red-500 rounded-full border border-white animate-pulse"></span>}
               </motion.button>
 
-              {/* Profile Avatar (No Text) */}
+              {/* Profile Avatar */}
               <motion.button 
                 whileHover={{ scale: 1.1 }}
                 whileTap={{ scale: 0.9 }}
@@ -223,7 +250,7 @@ function App() {
       {/* --- MAIN CONTENT CONTAINER --- */}
       <div 
         className={`mx-auto pt-24 md:pb-8 min-h-screen relative z-0 transition-all duration-300 ease-in-out
-          ${(view === 'explore' || view === 'profile') 
+          ${(view === 'explore' || view === 'profile' || view === 'chat' || view === 'notifications') 
             ? 'w-full px-2 md:px-6' 
             : 'w-full max-w-lg md:max-w-2xl lg:max-w-4xl px-4'
           }`}
@@ -265,8 +292,31 @@ function App() {
                   currentUser={currentUser} 
                   onBack={handleBack} 
                   onLogout={handleLogout}
-                  onPostClick={handleOpenPost} 
+                  onPostClick={handleOpenPost}
+                  onNavigateToChat={handleOpenChat} 
+                  onProfileClick={handleOpenProfile}
                 />
+              </motion.div>
+            )}
+
+            {/* --- NOTIFICATIONS VIEW --- */}
+            {view === "notifications" && (
+              <motion.div key="notifications" initial="initial" animate="in" exit="out" variants={pageVariants} transition={pageTransition} className="pt-0 md:pt-4">
+                  <Notifications 
+                    currentUser={currentUser} 
+                    onPostClick={handleOpenPost}
+                    onProfileClick={handleOpenProfile} 
+                  />
+              </motion.div>
+            )}
+
+            {view === "chat" && (
+              <motion.div key="chat" initial="initial" animate="in" exit="out" variants={pageVariants} transition={pageTransition} className="pt-0 md:pt-2 h-full">
+                  <ChatPage 
+                    currentUser={currentUser} 
+                    initialChatId={activeChatId} 
+                    onBack={handleBack} 
+                  />
               </motion.div>
             )}
 

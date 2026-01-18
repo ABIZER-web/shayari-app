@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, writeBatch, getDocs } from 'firebase/firestore'; 
-import { Heart, Bell, MessageCircle, User } from 'lucide-react'; 
+import { collection, query, where, onSnapshot, writeBatch, getDocs, doc, updateDoc, arrayUnion, setDoc, addDoc, serverTimestamp } from 'firebase/firestore'; 
+import { Heart, Bell, MessageCircle, User, UserPlus } from 'lucide-react'; 
 
 const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [myFollowing, setMyFollowing] = useState([]); // Store users I am following
 
   // 1. MARK AS READ (Runs once on mount)
   useEffect(() => {
@@ -31,17 +32,27 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
     markAllRead();
   }, [currentUser]);
 
-  // 2. FETCH AND DISPLAY (Real-time)
+  // 2. FETCH DATA (Notifications + My Following List)
   useEffect(() => {
     if (!currentUser) return;
 
+    // A. Listen to "My" profile to know who I follow (for the Follow Back button status)
+    const userRef = doc(db, "users", currentUser);
+    const unsubUser = onSnapshot(userRef, (docSnap) => {
+        if (docSnap.exists()) {
+            setMyFollowing(docSnap.data().following || []);
+        }
+    });
+
+    // B. Listen to Notifications
     const q = query(
       collection(db, "notifications"),
       where("toUser", "==", currentUser)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubNotes = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Filter out notifications from self
       const othersNotifications = list.filter(n => n.fromUser !== currentUser);
 
       // Sort by Time (Newest First)
@@ -55,21 +66,59 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+        unsubUser();
+        unsubNotes();
+    };
   }, [currentUser]);
+
+  // --- HANDLE FOLLOW BACK ---
+  const handleFollowBack = async (targetUser) => {
+      try {
+          const myRef = doc(db, "users", currentUser);
+          const targetRef = doc(db, "users", targetUser);
+
+          // 1. Ensure docs exist (safe-guard)
+          await setDoc(myRef, { uid: currentUser }, { merge: true });
+          await setDoc(targetRef, { uid: targetUser }, { merge: true });
+
+          // 2. Update Firestore (Follow action)
+          await updateDoc(myRef, { following: arrayUnion(targetUser) });
+          await updateDoc(targetRef, { followers: arrayUnion(currentUser) });
+
+          // 3. Send Notification to them
+          await addDoc(collection(db, "notifications"), {
+              type: "follow",
+              fromUser: currentUser,
+              toUser: targetUser,
+              timestamp: serverTimestamp(),
+              read: false
+          });
+
+      } catch (error) {
+          console.error("Error following back:", error);
+          alert("Failed to follow back.");
+      }
+  };
 
   const formatTime = (timestamp) => {
     if (!timestamp) return "";
     const date = new Date(timestamp.seconds * 1000);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const now = new Date();
+    const diff = Math.floor((now - date) / 1000); // seconds
+
+    if (diff < 60) return "Just now";
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
   };
 
   if (loading) return <div className="text-center py-20 text-gray-400">Loading alerts...</div>;
 
   return (
-    <div className="p-4 space-y-4 min-h-screen">
+    <div className="p-2 space-y-2 min-h-screen pb-20">
       <h2 className="text-xl font-bold font-serif flex items-center gap-2 mb-4 px-2">
-        <Bell className="fill-black" /> Notifications
+        <Bell className="fill-black" size={20} /> Notifications
       </h2>
 
       {notifications.length === 0 ? (
@@ -81,14 +130,13 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
         notifications.map((note) => (
           <div 
             key={note.id} 
-            // 1. CLICK CARD -> GO TO POST (Only if postId exists)
+            // Logic: If it has a postId, go to post. Otherwise (like 'follow'), do nothing on card click.
             onClick={() => note.postId && onPostClick && onPostClick(note.postId)}
-            className={`bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 animate-fade-in hover:bg-gray-50 transition ${note.postId ? 'cursor-pointer' : 'cursor-default'}`}
+            className={`bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 transition ${note.postId ? 'cursor-pointer hover:bg-gray-50' : ''}`}
           >
             
-            {/* AVATAR WITH BADGE */}
-            <div className="relative">
-                {/* User Initial Circle */}
+            {/* AVATAR SECTION */}
+            <div className="relative shrink-0">
                 <div 
                     className="w-12 h-12 rounded-full bg-gradient-to-tr from-gray-200 to-gray-100 flex items-center justify-center text-gray-600 font-bold text-lg border border-gray-200 cursor-pointer hover:border-indigo-300 transition"
                     onClick={(e) => {
@@ -99,9 +147,15 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
                     {note.fromUser ? note.fromUser[0].toUpperCase() : <User size={20}/>}
                 </div>
 
-                {/* Small Badge Icon (Heart or Comment) */}
-                <div className={`absolute -bottom-1 -right-1 p-1 rounded-full border-2 border-white ${note.type === 'like' ? 'bg-red-100 text-red-500' : 'bg-blue-100 text-blue-500'}`}>
-                    {note.type === 'like' ? <Heart size={12} fill="currentColor" /> : <MessageCircle size={12} fill="currentColor" />}
+                {/* Badge Icon */}
+                <div className={`absolute -bottom-1 -right-1 p-1 rounded-full border-2 border-white ${
+                    note.type === 'like' ? 'bg-pink-100 text-pink-500' : 
+                    note.type === 'follow' ? 'bg-blue-100 text-blue-500' : 
+                    'bg-indigo-100 text-indigo-500'
+                }`}>
+                    {note.type === 'like' && <Heart size={12} fill="currentColor" />}
+                    {note.type === 'comment' && <MessageCircle size={12} fill="currentColor" />}
+                    {note.type === 'follow' && <UserPlus size={12} fill="currentColor" />}
                 </div>
             </div>
             
@@ -109,8 +163,7 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
               {/* TEXT CONTENT */}
               <p className="text-sm text-gray-800 leading-snug">
                 <span 
-                    className="font-bold text-indigo-600 hover:underline cursor-pointer"
-                    // 2. CLICK USERNAME -> GO TO PROFILE (Stop bubbling)
+                    className="font-bold text-black hover:underline cursor-pointer mr-1"
                     onClick={(e) => {
                         e.stopPropagation();
                         if (onProfileClick) onProfileClick(note.fromUser);
@@ -119,26 +172,58 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
                     @{note.fromUser}
                 </span> 
                 <span className="text-gray-600">
-                    {note.type === 'like' ? ' liked your post.' : ' commented: '}
+                    {note.type === 'like' && 'liked your post.'}
+                    {note.type === 'follow' && 'started following you.'}
+                    {note.type === 'comment' && 'commented on your post:'}
                 </span>
+                
+                {/* Comment Snippet */}
                 {note.type === 'comment' && (
-                    <span className="text-gray-800 font-medium">"{note.contentSnippet}"</span>
+                    <span className="text-gray-800 font-medium block truncate mt-0.5 border-l-2 border-gray-200 pl-2 text-xs">
+                        "{note.contentSnippet}"
+                    </span>
                 )}
               </p>
               
               <div className="flex justify-between items-center mt-1.5">
-                {note.type === 'like' && (
-                    <p className="text-xs text-gray-400 italic line-clamp-1 max-w-[150px]">
-                        {note.contentSnippet ? `"${note.contentSnippet}"` : "View Post"}
+                {/* Like Snippet (Show text of post liked) */}
+                {note.type === 'like' && note.contentSnippet && (
+                    <p className="text-[10px] text-gray-400 italic line-clamp-1 max-w-[150px]">
+                        "{note.contentSnippet}"
                     </p>
                 )}
-                <span className="text-[10px] text-gray-400 font-medium tracking-wide">{formatTime(note.timestamp)}</span>
+
+                {/* --- FOLLOW BACK BUTTON (Only for follow notifications) --- */}
+                {note.type === 'follow' && (
+                    <div className="ml-auto mr-2">
+                        {!myFollowing.includes(note.fromUser) ? (
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation(); // Prevent card click
+                                    handleFollowBack(note.fromUser);
+                                }}
+                                className="bg-blue-600 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg hover:bg-blue-700 transition shadow-sm"
+                            >
+                                Follow Back
+                            </button>
+                        ) : (
+                            <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-md border border-gray-200">
+                                Following
+                            </span>
+                        )}
+                    </div>
+                )}
+                
+                {/* Timestamp */}
+                <span className={`text-[10px] text-gray-400 font-medium tracking-wide ${note.type !== 'follow' ? 'ml-auto' : ''}`}>
+                    {formatTime(note.timestamp)}
+                </span>
               </div>
             </div>
             
-            {/* THUMBNAIL IMAGE (If post has one) */}
-            {note.image && (
-                <img src={note.image} alt="Post" className="w-12 h-12 rounded-lg object-cover border border-gray-100 shadow-sm" />
+            {/* THUMBNAIL IMAGE (If post has one and it's not a follow) */}
+            {note.image && note.type !== 'follow' && (
+                <img src={note.image} alt="Post" className="w-10 h-10 rounded-lg object-cover border border-gray-100 shadow-sm shrink-0" />
             )}
           </div>
         ))
