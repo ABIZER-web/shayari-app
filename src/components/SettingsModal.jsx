@@ -1,11 +1,12 @@
+// File: src/components/SettingsModal.jsx
 import { useState, useEffect } from 'react';
 import { 
   X, Lock, Activity, Heart, Image as ImageIcon, ExternalLink, 
   Loader2, Mail, ShieldAlert, ChevronRight, Settings, Bookmark, 
-  MessageSquare, Repeat, LogOut, ArrowLeft 
+  MessageSquare, Repeat, LogOut, ArrowLeft, Eye, EyeOff 
 } from 'lucide-react';
 import { db, auth } from '../firebase'; 
-import { collection, query, where, getDocs, doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail, deleteUser, signOut } from 'firebase/auth'; 
 import { isAdmin } from '../adminConfig'; 
 
@@ -17,6 +18,7 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick }) => {
   const [resetMessage, setResetMessage] = useState("");
   const [allowUserDelete, setAllowUserDelete] = useState(true);
   const [loadingDelete, setLoadingDelete] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(false);
   
   const isSystemAdmin = isAdmin(currentUser);
 
@@ -25,8 +27,28 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick }) => {
         setCurrentView('menu'); 
         setResetMessage("");
         fetchGlobalSettings();
+        fetchUserSettings();
     }
-  }, [isOpen]);
+  }, [isOpen, currentUser]);
+
+  const fetchUserSettings = async () => {
+      const userRef = doc(db, "users", currentUser);
+      const snap = await getDoc(userRef);
+      if (snap.exists()) {
+          setIsPrivate(snap.data().isPrivate || false);
+      }
+  };
+
+  const handleTogglePrivacy = async () => {
+      const newState = !isPrivate;
+      setIsPrivate(newState);
+      try {
+          await updateDoc(doc(db, "users", currentUser), { isPrivate: newState });
+      } catch (err) {
+          console.error("Error updating privacy:", err);
+          setIsPrivate(!newState);
+      }
+  };
 
   const fetchGlobalSettings = async () => {
     const docRef = doc(db, "app_settings", "config");
@@ -116,22 +138,20 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick }) => {
         <div className="px-4 py-3 border-b border-gray-100 flex items-center bg-white sticky top-0 z-20">
             {currentView !== 'menu' && (<button onClick={() => setCurrentView('menu')} className="mr-3 p-1 rounded-full hover:bg-gray-100 transition"><ArrowLeft size={22} className="text-gray-800" /></button>)}
             <h2 className="text-lg font-bold font-serif text-gray-800 flex-1 text-center pr-8">
-                {currentView === 'menu' ? 'Settings' : currentView === 'security' ? 'Security' : currentView === 'activity' ? 'Your Activity' : currentView === 'saved' ? 'Saved' : 'Settings'}
+                {currentView === 'menu' ? 'Settings' : currentView === 'security' ? 'Security' : currentView === 'activity' ? 'Your Activity' : 'Saved'}
             </h2>
             {currentView === 'menu' && (<button onClick={onClose} className="p-1 rounded-full hover:bg-gray-100"><X size={22} className="text-gray-800" /></button>)}
         </div>
 
-        {/* --- CONTENT AREA --- */}
+        {/* --- CONTENT --- */}
         <div className="flex-1 overflow-y-auto bg-white">
             
-            {/* VIEW 1: MAIN MENU LIST */}
             {currentView === 'menu' && (
                 <div className="flex flex-col">
                     <div className="py-2">
                         <MenuItem icon={Settings} label="Settings & Security" onClick={() => setCurrentView('security')} />
                         <MenuItem icon={Activity} label="Your Activity" onClick={() => { fetchLikedPosts(); setCurrentView('activity'); }} />
                         <MenuItem icon={Bookmark} label="Saved" onClick={() => { fetchSavedPosts(); setCurrentView('saved'); }} />
-                        {/* DARK MODE REMOVED */}
                         <MenuItem icon={MessageSquare} label="Report a problem" onClick={() => alert("Reporting coming soon!")} />
                     </div>
                     <div className="h-2 bg-gray-50 border-t border-b border-gray-100"></div>
@@ -142,17 +162,30 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick }) => {
                 </div>
             )}
 
-            {/* VIEW: SECURITY */}
             {currentView === 'security' && (
-                <div className="p-6 space-y-6 text-center">
-                    <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100">
+                <div className="p-6 space-y-6">
+                    <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-full ${isPrivate ? 'bg-black text-white' : 'bg-white text-gray-500 border border-gray-200'}`}>{isPrivate ? <Lock size={20} /> : <Eye size={20} />}</div>
+                            <div><h3 className="font-bold text-gray-900 text-sm">Private Account</h3><p className="text-xs text-gray-500">Only followers can see your photos.</p></div>
+                        </div>
+                        <button onClick={handleTogglePrivacy} className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 ${isPrivate ? 'bg-black' : 'bg-gray-300'}`}><div className={`w-4 h-4 bg-white rounded-full shadow transition-transform duration-300 ${isPrivate ? 'translate-x-5' : 'translate-x-0'}`} /></button>
+                    </div>
+                    {/* Security Reset */}
+                    <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100 text-center">
                         <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3"><Lock size={24} /></div>
                         <h3 className="font-bold text-gray-900 mb-1">Login Security</h3>
                         <p className="text-sm text-gray-500 mb-4">{auth.currentUser?.email}</p>
                         <button onClick={handlePasswordReset} className="w-full py-2 bg-white border border-gray-300 rounded-lg text-sm font-bold hover:bg-gray-50 transition">Reset Password</button>
                         {resetMessage && <p className="text-xs text-green-600 mt-2 font-medium">{resetMessage}</p>}
                     </div>
-                    <div className="pt-4 border-t border-gray-100">
+                    {isSystemAdmin && (
+                        <div className="flex items-center justify-between p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                            <span className="text-sm font-bold text-indigo-900">Admin: Allow Deletion</span>
+                            <button onClick={toggleDeletePermission} className={`w-10 h-6 rounded-full p-1 transition-colors ${allowUserDelete ? 'bg-green-500' : 'bg-gray-300'}`}><div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${allowUserDelete ? 'translate-x-4' : ''}`} /></button>
+                        </div>
+                    )}
+                    <div className="pt-4 border-t border-gray-100 text-center">
                         {allowUserDelete || isSystemAdmin ? (
                             <button onClick={handleDeleteMyAccount} disabled={loadingDelete} className="text-red-500 text-sm font-bold flex items-center justify-center gap-2 w-full py-3 hover:bg-red-50 rounded-xl transition"><ShieldAlert size={18} /> Delete Account</button>
                         ) : <p className="text-xs text-gray-400">Account deletion disabled by admin.</p>}
@@ -160,7 +193,6 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick }) => {
                 </div>
             )}
 
-            {/* VIEW: ACTIVITY */}
             {currentView === 'activity' && (
                 <div className="p-4">
                     {loading ? <div className="py-20 flex justify-center"><Loader2 className="animate-spin text-gray-400"/></div> : likedPosts.length > 0 ? (
@@ -177,7 +209,6 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick }) => {
                 </div>
             )}
 
-            {/* VIEW: SAVED */}
             {currentView === 'saved' && (
                 <div className="p-4">
                     {savedPosts.length > 0 ? (

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Home, PlusSquare, Search, User, MessageCircle, Heart, Menu, LogOut, X, Instagram, Send, Phone, PhoneOff } from 'lucide-react'; 
+import { Home, PlusSquare, Search, User, MessageCircle, Heart, Menu, Instagram, Send, Phone, PhoneOff, Video, X } from 'lucide-react'; 
 import { db, auth } from './firebase'; 
 import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore'; 
 import { signOut } from 'firebase/auth';
@@ -40,7 +40,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNotificationsDesktop, setShowNotificationsDesktop] = useState(false);
 
-  // Incoming Call State
+  // Call State
   const [incomingCall, setIncomingCall] = useState(null);
 
   // --- PERSISTENCE ---
@@ -50,22 +50,20 @@ function App() {
   }, [view, viewingProfile]);
 
   useEffect(() => {
-    // FORCE LIGHT MODE
-    document.documentElement.classList.remove('dark');
+    document.documentElement.classList.remove('dark'); // Force Light Mode
     localStorage.removeItem('theme');
-    
     if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
   }, []);
 
-  // --- LISTENERS ---
+  // --- LISTENERS FOR NOTIFICATIONS & MESSAGES & CALLS ---
   useEffect(() => {
     if (!currentUser) return;
 
-    // 1. Unread Notifications
+    // 1. Check for Unread Notifications
     const qNotif = query(collection(db, "notifications"), where("toUser", "==", currentUser), where("read", "==", false));
     const unsubNotif = onSnapshot(qNotif, (snap) => setHasUnreadNotif(!snap.empty));
 
-    // 2. Unread Messages
+    // 2. Check for Unread Messages (Global Indicator)
     const qChats = query(collection(db, "chats"), where("participants", "array-contains", currentUser));
     const unsubChats = onSnapshot(qChats, (snapshot) => {
       let unreadFound = false;
@@ -78,12 +76,18 @@ function App() {
       setHasUnreadMsg(unreadFound);
     });
 
-    // 3. Incoming Calls
-    const qCalls = query(collection(db, "calls"), where("receiver", "==", currentUser), where("status", "==", "ringing"));
+    // 3. Listen for Incoming Calls
+    // We look for calls where 'receiver' is me and status is 'ringing'
+    const qCalls = query(
+        collection(db, "calls"), 
+        where("receiver", "==", currentUser), 
+        where("status", "==", "ringing")
+    );
     const unsubCalls = onSnapshot(qCalls, (snapshot) => {
-        if(!snapshot.empty) {
-            const callData = snapshot.docs[0].data();
-            setIncomingCall({ id: snapshot.docs[0].id, ...callData });
+        if (!snapshot.empty) {
+            // Get the first ringing call
+            const callDoc = snapshot.docs[0];
+            setIncomingCall({ id: callDoc.id, ...callDoc.data() });
         } else {
             setIncomingCall(null);
         }
@@ -93,17 +97,20 @@ function App() {
   }, [currentUser]);
 
   // --- HANDLERS ---
+  
   const handleAcceptCall = async () => {
-      if(!incomingCall) return;
+      if (!incomingCall) return;
+      // 1. Update call status to connected
       await updateDoc(doc(db, "calls", incomingCall.id), { status: 'connected' });
-      // Identify Chat ID to navigate to
+      // 2. Navigate to the chat page with the caller
       const chatId = [currentUser, incomingCall.caller].sort().join("_");
       handleNav('chat', null, chatId);
+      // 3. Clear local state (ChatPage handles the UI now)
       setIncomingCall(null);
   };
 
   const handleDeclineCall = async () => {
-      if(!incomingCall) return;
+      if (!incomingCall) return;
       await updateDoc(doc(db, "calls", incomingCall.id), { status: 'ended' });
       setIncomingCall(null);
   };
@@ -151,6 +158,7 @@ function App() {
     }
   };
 
+  // --- DESKTOP SIDEBAR ITEM ---
   const SidebarItem = ({ icon: Icon, label, isActive, onClick, alert }) => (
     <button 
       onClick={onClick}
@@ -183,7 +191,7 @@ function App() {
       
       {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)}/>}
 
-      {/* --- INCOMING CALL NOTIFICATION --- */}
+      {/* --- INCOMING CALL MODAL --- */}
       <AnimatePresence>
         {incomingCall && (
             <motion.div 
