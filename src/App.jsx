@@ -16,6 +16,7 @@ import Notifications from './components/Notifications';
 import SinglePostView from './components/SinglePostView'; 
 import SettingsModal from './components/SettingsModal';
 import ChatPage from './components/ChatPage'; 
+import VideoCall from './components/VideoCall';
 
 const pageVariants = {
   initial: { opacity: 0 },
@@ -23,6 +24,8 @@ const pageVariants = {
   out: { opacity: 0 }
 };
 
+// Add this inside App function
+const [activeCallSession, setActiveCallSession] = useState(null); // { id, isCaller }
 const pageTransition = { type: "tween", ease: "easeInOut", duration: 0.2 };
 
 function App() {
