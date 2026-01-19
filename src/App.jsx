@@ -16,7 +16,7 @@ import Notifications from './components/Notifications';
 import SinglePostView from './components/SinglePostView'; 
 import SettingsModal from './components/SettingsModal';
 import ChatPage from './components/ChatPage'; 
-import VideoCall from './components/VideoCall';
+import VideoCall from './components/VideoCall'; 
 
 const pageVariants = {
   initial: { opacity: 0 },
@@ -24,11 +24,10 @@ const pageVariants = {
   out: { opacity: 0 }
 };
 
-// Add this inside App function
-const [activeCallSession, setActiveCallSession] = useState(null); // { id, isCaller }
 const pageTransition = { type: "tween", ease: "easeInOut", duration: 0.2 };
 
 function App() {
+  // Initialize from LocalStorage
   const [currentUser, setCurrentUser] = useState(localStorage.getItem('shayari_user') || null);
   const [view, setView] = useState(localStorage.getItem('shayari_current_view') || "home");
   
@@ -43,8 +42,9 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNotificationsDesktop, setShowNotificationsDesktop] = useState(false);
 
-  // Call State
-  const [incomingCall, setIncomingCall] = useState(null);
+  // --- CALL STATES ---
+  const [incomingCall, setIncomingCall] = useState(null); 
+  const [activeCallSession, setActiveCallSession] = useState(null);
 
   // --- PERSISTENCE ---
   useEffect(() => {
@@ -53,20 +53,20 @@ function App() {
   }, [view, viewingProfile]);
 
   useEffect(() => {
-    document.documentElement.classList.remove('dark'); // Force Light Mode
+    document.documentElement.classList.remove('dark'); 
     localStorage.removeItem('theme');
     if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
   }, []);
 
-  // --- LISTENERS FOR NOTIFICATIONS & MESSAGES & CALLS ---
+  // --- LISTENERS ---
   useEffect(() => {
     if (!currentUser) return;
 
-    // 1. Check for Unread Notifications
+    // 1. Unread Notifications
     const qNotif = query(collection(db, "notifications"), where("toUser", "==", currentUser), where("read", "==", false));
     const unsubNotif = onSnapshot(qNotif, (snap) => setHasUnreadNotif(!snap.empty));
 
-    // 2. Check for Unread Messages (Global Indicator)
+    // 2. Unread Messages
     const qChats = query(collection(db, "chats"), where("participants", "array-contains", currentUser));
     const unsubChats = onSnapshot(qChats, (snapshot) => {
       let unreadFound = false;
@@ -79,8 +79,7 @@ function App() {
       setHasUnreadMsg(unreadFound);
     });
 
-    // 3. Listen for Incoming Calls
-    // We look for calls where 'receiver' is me and status is 'ringing'
+    // 3. Incoming Calls
     const qCalls = query(
         collection(db, "calls"), 
         where("receiver", "==", currentUser), 
@@ -88,27 +87,24 @@ function App() {
     );
     const unsubCalls = onSnapshot(qCalls, (snapshot) => {
         if (!snapshot.empty) {
-            // Get the first ringing call
             const callDoc = snapshot.docs[0];
-            setIncomingCall({ id: callDoc.id, ...callDoc.data() });
+            if (!activeCallSession) {
+                setIncomingCall({ id: callDoc.id, ...callDoc.data() });
+            }
         } else {
             setIncomingCall(null);
         }
     });
 
     return () => { unsubNotif(); unsubChats(); unsubCalls(); };
-  }, [currentUser]);
+  }, [currentUser, activeCallSession]);
 
   // --- HANDLERS ---
   
   const handleAcceptCall = async () => {
       if (!incomingCall) return;
-      // 1. Update call status to connected
       await updateDoc(doc(db, "calls", incomingCall.id), { status: 'connected' });
-      // 2. Navigate to the chat page with the caller
-      const chatId = [currentUser, incomingCall.caller].sort().join("_");
-      handleNav('chat', null, chatId);
-      // 3. Clear local state (ChatPage handles the UI now)
+      setActiveCallSession({ id: incomingCall.id, isCaller: false });
       setIncomingCall(null);
   };
 
@@ -151,34 +147,31 @@ function App() {
     localStorage.setItem('shayari_user', username);
   };
 
+  // --- UPDATED LOGOUT ---
   const handleLogout = async () => {
-    if (window.confirm("Log out?")) {
-      try { await signOut(auth); } catch (e) { console.error(e); }
-      localStorage.clear(); 
-      setCurrentUser(null);
-      setHistory([]);
-      setView("home");
-    }
+    // 1. Sign out from Firebase
+    try { await signOut(auth); } catch (e) { console.error(e); }
+    
+    // 2. Clear Active Session ONLY (Keep 'shayari_saved_accounts')
+    localStorage.removeItem('shayari_user'); 
+    localStorage.removeItem('shayari_current_view');
+    localStorage.removeItem('shayari_last_profile');
+    
+    // 3. Reset State
+    setCurrentUser(null);
+    setHistory([]);
+    setView("home");
   };
 
-  // --- DESKTOP SIDEBAR ITEM ---
   const SidebarItem = ({ icon: Icon, label, isActive, onClick, alert }) => (
     <button 
       onClick={onClick}
       className={`flex items-center gap-4 p-3 rounded-lg w-full transition-all group ${
-          isActive 
-          ? 'font-bold' 
-          : 'font-normal hover:bg-gray-50'
+          isActive ? 'font-bold' : 'font-normal hover:bg-gray-50'
       }`}
     >
       <div className="relative">
-        <Icon 
-            size={28} 
-            strokeWidth={isActive ? 2.8 : 2} 
-            className={`transition-transform group-hover:scale-105 ${
-                isActive ? 'text-black' : 'text-gray-800'
-            }`} 
-        />
+        <Icon size={28} strokeWidth={isActive ? 2.8 : 2} className={`transition-transform group-hover:scale-105 ${isActive ? 'text-black' : 'text-gray-800'}`} />
         {alert && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
       </div>
       <span className={`hidden lg:block text-base ${isActive ? 'text-black' : 'text-gray-800'}`}>{label}</span>
@@ -192,11 +185,30 @@ function App() {
   return (
     <div className="min-h-screen bg-white text-gray-900 font-sans flex flex-col md:flex-row">
       
-      {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)}/>}
+      {/* --- SETTINGS MODAL (Now handles Logout) --- */}
+      {showSettings && (
+        <SettingsModal 
+            isOpen={showSettings} 
+            onClose={() => setShowSettings(false)} 
+            currentUser={currentUser} 
+            onPostClick={(id) => handleNav('singlePost', null, null, id)}
+            onLogout={handleLogout} // <--- Pass Logout Function Here
+        />
+      )}
 
-      {/* --- INCOMING CALL MODAL --- */}
+      {/* --- VIDEO CALL FULL SCREEN OVERLAY --- */}
+      {activeCallSession && (
+        <VideoCall 
+            callId={activeCallSession.id} 
+            currentUser={currentUser} 
+            isCaller={activeCallSession.isCaller} 
+            onEndCall={() => setActiveCallSession(null)} 
+        />
+      )}
+
+      {/* --- INCOMING CALL POPUP --- */}
       <AnimatePresence>
-        {incomingCall && (
+        {incomingCall && !activeCallSession && (
             <motion.div 
                 initial={{ y: -100, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
@@ -322,6 +334,8 @@ function App() {
                         <Dashboard />
                         <ShayariFeed onProfileClick={(uid) => handleNav('profile', uid)} />
                     </div>
+                    
+                    {/* --- DESKTOP SUGGESTIONS COLUMN (Logout removed) --- */}
                     <div className="hidden lg:block w-[320px] pt-4">
                         <div className="flex items-center justify-between mb-4">
                             <div className="flex items-center gap-3 cursor-pointer" onClick={() => handleNav('profile', currentUser)}>
@@ -331,7 +345,8 @@ function App() {
                                     <p className="text-gray-500 text-sm">ShayariGram</p>
                                 </div>
                             </div>
-                            <button onClick={handleLogout} className="text-blue-500 text-xs font-bold hover:text-blue-700">Log Out</button>
+                            {/* REPLACED LOGOUT BUTTON WITH VIEW PROFILE */}
+                            <button onClick={() => handleNav('profile', currentUser)} className="text-blue-500 text-xs font-bold hover:text-blue-700">View</button>
                         </div>
                         <p className="text-gray-400 text-sm font-bold mb-4">Suggested for you</p>
                         <div className="text-xs text-gray-300">© 2026 SHAYARIGRAM FROM META</div>
@@ -360,10 +375,10 @@ function App() {
                       profileUser={viewingProfile} 
                       currentUser={currentUser} 
                       onBack={handleBack} 
-                      onLogout={handleLogout}
                       onPostClick={(id) => handleNav('singlePost', null, null, id)}
                       onNavigateToChat={(chatId) => handleNav('chat', null, chatId)} 
                       onProfileClick={(uid) => handleNav('profile', uid)}
+                      onLogout={handleLogout} // Still passed down if needed, but primary is in Settings
                     />
                   </motion.div>
                 )}
@@ -384,6 +399,7 @@ function App() {
                         currentUser={currentUser} 
                         initialChatId={activeChatId} 
                         onBack={handleBack} 
+                        onCallStart={(callId) => setActiveCallSession({ id: callId, isCaller: true })}
                       />
                   </motion.div>
                 )}

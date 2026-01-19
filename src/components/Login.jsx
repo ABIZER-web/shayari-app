@@ -1,287 +1,319 @@
-import { useState } from 'react';
-import { auth, db } from '../firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { Mail, Lock, User, Loader2, AlertCircle, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { auth, db, googleProvider } from '../firebase';
+import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { doc, setDoc, getDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
+import { X, UserPlus, LogIn, ChevronRight } from 'lucide-react';
 
 const Login = ({ onLogin }) => {
-  const [viewState, setViewState] = useState("login"); // 'login', 'signup', 'forgot'
+  const [isLogin, setIsLogin] = useState(true); // Toggle Login/Signup
+  const [emailOrUser, setEmailOrUser] = useState(""); // Can be email OR username
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [username, setUsername] = useState(""); 
+  const [username, setUsername] = useState("");
+  const [fullName, setFullName] = useState("");
   const [error, setError] = useState("");
-  const [successMsg, setSuccessMsg] = useState(""); 
   const [loading, setLoading] = useState(false);
+  
+  // Saved Accounts State
+  const [savedAccounts, setSavedAccounts] = useState([]);
+  const [showSavedAccounts, setShowSavedAccounts] = useState(true);
 
-  const handleSubmit = async (e) => {
+  // 1. Load Saved Accounts on Mount
+  useEffect(() => {
+    const saved = JSON.parse(localStorage.getItem('shayari_saved_accounts') || "[]");
+    setSavedAccounts(saved);
+    if (saved.length === 0) setShowSavedAccounts(false);
+  }, []);
+
+  // 2. HELPER: Save Account to LocalStorage (for Switch Account)
+  const saveAccountLocally = (user) => {
+    const newAccount = {
+        uid: user.uid,
+        username: user.displayName || "User",
+        photoURL: user.photoURL,
+        email: user.email // Needed for quick login pre-fill
+    };
+
+    const existing = JSON.parse(localStorage.getItem('shayari_saved_accounts') || "[]");
+    // Remove if already exists to update it to the top
+    const filtered = existing.filter(acc => acc.uid !== user.uid);
+    const updated = [newAccount, ...filtered];
+    
+    localStorage.setItem('shayari_saved_accounts', JSON.stringify(updated));
+  };
+
+  // 3. LOGIN LOGIC (Username OR Email)
+  const handleAuth = async (e) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
     try {
-      if (viewState === "signup") {
-        // --- SIGN UP LOGIC ---
-        if (!username.trim()) throw new Error("Username is required");
-        
-        const userDoc = await getDoc(doc(db, "users", username));
-        if (userDoc.exists()) throw new Error("Username already taken. Choose another.");
+      if (isLogin) {
+        // --- LOGIN MODE ---
+        let targetEmail = emailOrUser;
 
+        // A. Check if input is NOT an email (assume it's a username)
+        if (!emailOrUser.includes('@')) {
+            const q = query(collection(db, "users"), where("username", "==", emailOrUser));
+            const querySnapshot = await getDocs(q);
+            
+            if (querySnapshot.empty) {
+                throw new Error("Username not found.");
+            }
+            // Get the email associated with this username
+            targetEmail = querySnapshot.docs[0].data().email;
+        }
+
+        // B. Sign In
+        const userCredential = await signInWithEmailAndPassword(auth, targetEmail, password);
+        const user = userCredential.user;
+        
+        // C. Fetch Username from DB if missing in Auth
+        let finalUsername = user.displayName;
+        if (!finalUsername) {
+            const userDoc = await getDoc(doc(db, "users", user.uid));
+            if (userDoc.exists()) finalUsername = userDoc.data().username;
+        }
+
+        saveAccountLocally({ ...user, displayName: finalUsername });
+        onLogin(finalUsername);
+      
+      } else {
+        // --- SIGNUP MODE ---
+        // 1. Check Username Availability
+        const q = query(collection(db, "users"), where("username", "==", username));
+        const usernameCheck = await getDocs(q);
+        if (!usernameCheck.empty) throw new Error("Username is already taken.");
+
+        // 2. Create Auth User
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
 
+        // 3. Update Profile
         await updateProfile(user, { displayName: username });
 
-        await setDoc(doc(db, "users", username), {
+        // 4. Create User Document
+        await setDoc(doc(db, "users", user.uid), {
           uid: user.uid,
-          email: user.email,
-          bio: "Just joined ShayariGram!",
-          location: "Unknown",
-          createdAt: new Date()
+          username: username,
+          email: email,
+          fullName: fullName,
+          photoURL: "",
+          bio: "",
+          followers: [],
+          following: [],
+          saved: [],
+          createdAt: serverTimestamp()
         });
 
+        saveAccountLocally({ ...user, displayName: username });
         onLogin(username);
-
-      } else {
-        // --- LOGIN LOGIC ---
-        const userCredential = await signInWithEmailAndPassword(auth, email, password);
-        const user = userCredential.user;
-        
-        onLogin(user.displayName || user.email.split('@')[0]); 
       }
     } catch (err) {
       console.error(err);
-      let msg = err.message.replace("Firebase: ", "").replace("auth/", "").replace(/-/g, " ");
-      setError(msg.charAt(0).toUpperCase() + msg.slice(1));
+      setError(err.message.replace("Firebase: ", ""));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
-  const handlePasswordReset = async (e) => {
-    e.preventDefault();
-    if (!email) { setError("Please enter your email address first."); return; }
-    
-    setError(""); setSuccessMsg(""); setLoading(true);
-
+  // 4. GOOGLE LOGIN
+  const handleGoogleLogin = async () => {
     try {
-        await sendPasswordResetEmail(auth, email);
-        setSuccessMsg(`Reset link sent to ${email}`);
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      
+      // Check if user exists
+      const userDoc = await getDoc(doc(db, "users", user.uid));
+      let finalUsername = user.displayName.replace(/\s+/g, '').toLowerCase();
+
+      if (!userDoc.exists()) {
+        // Create new doc if first time
+        await setDoc(doc(db, "users", user.uid), {
+          uid: user.uid,
+          username: finalUsername,
+          email: user.email,
+          fullName: user.displayName,
+          photoURL: user.photoURL,
+          bio: "",
+          followers: [],
+          following: [],
+          saved: [],
+          createdAt: serverTimestamp()
+        });
+      } else {
+          finalUsername = userDoc.data().username;
+      }
+      
+      saveAccountLocally({ ...user, displayName: finalUsername });
+      onLogin(finalUsername);
     } catch (err) {
-        console.error(err);
-        let msg = err.message.replace("Firebase: ", "").replace("auth/", "").replace(/-/g, " ");
-        setError(msg.charAt(0).toUpperCase() + msg.slice(1));
+      setError("Google Login Failed");
     }
-    setLoading(false);
+  };
+
+  // 5. CLICK SAVED ACCOUNT
+  const handleSavedAccountClick = (acc) => {
+      // Pre-fill and switch to login view
+      setShowSavedAccounts(false);
+      setIsLogin(true);
+      setEmailOrUser(acc.username); // Or acc.email, but username looks nicer
+  };
+
+  const removeAccount = (e, uid) => {
+      e.stopPropagation();
+      const updated = savedAccounts.filter(acc => acc.uid !== uid);
+      setSavedAccounts(updated);
+      localStorage.setItem('shayari_saved_accounts', JSON.stringify(updated));
+      if (updated.length === 0) setShowSavedAccounts(false);
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4 font-sans relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       
-      {/* --- ANIMATED BACKGROUND --- */}
-      <div className="absolute inset-0 w-full h-full -z-10 pointer-events-none">
-        <motion.div 
-            animate={{ x: [0, 20, 0], y: [0, -20, 0] }} 
-            transition={{ duration: 8, repeat: Infinity }} 
-            className="absolute top-0 -left-10 w-72 h-72 bg-purple-300 rounded-full mix-blend-multiply filter blur-xl opacity-70"
-        ></motion.div>
-        <motion.div 
-            animate={{ x: [0, -30, 0], y: [0, 30, 0] }} 
-            transition={{ duration: 10, repeat: Infinity, delay: 1 }} 
-            className="absolute top-0 -right-10 w-72 h-72 bg-yellow-200 rounded-full mix-blend-multiply filter blur-xl opacity-70"
-        ></motion.div>
-        <motion.div 
-            animate={{ scale: [1, 1.1, 1] }} 
-            transition={{ duration: 12, repeat: Infinity, delay: 2 }} 
-            className="absolute -bottom-20 left-20 w-72 h-72 bg-pink-300 rounded-full mix-blend-multiply filter blur-xl opacity-70"
-        ></motion.div>
-      </div>
-
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.9, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.5, type: "spring" }}
-        className="bg-white/80 backdrop-blur-xl p-8 rounded-3xl shadow-xl w-full max-w-sm border border-white/50 relative z-10"
-      >
-        {/* --- HEADER --- */}
-        <div className="text-center mb-6">
-            <motion.h1 
-                initial={{ opacity: 0, y: -10 }} 
-                animate={{ opacity: 1, y: 0 }} 
-                transition={{ delay: 0.2 }}
-                className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-pink-500 bg-clip-text text-transparent font-serif mb-2"
-            >
-                ShayariGram
-            </motion.h1>
-            <motion.p 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }} 
-                transition={{ delay: 0.3 }} 
-                className="text-gray-500 text-sm"
-            >
-                {viewState === "signup" ? "Join the community of poets." 
-                : viewState === "forgot" ? "Reset your password." 
-                : "Welcome back, poet."}
-            </motion.p>
-        </div>
-
-        {/* --- ERROR / SUCCESS MESSAGES --- */}
-        <AnimatePresence mode="wait">
-            {error && (
-                <motion.div 
-                    initial={{ height: 0, opacity: 0 }} 
-                    animate={{ height: "auto", opacity: 1 }} 
-                    exit={{ height: 0, opacity: 0 }} 
-                    className="mb-4 p-3 bg-red-50 text-red-600 text-xs font-medium rounded-xl flex items-center gap-2 border border-red-100 overflow-hidden"
-                >
-                    <AlertCircle size={16} /> {error}
-                </motion.div>
-            )}
-            {successMsg && (
-                <motion.div 
-                    initial={{ height: 0, opacity: 0 }} 
-                    animate={{ height: "auto", opacity: 1 }} 
-                    exit={{ height: 0, opacity: 0 }} 
-                    className="mb-4 p-3 bg-green-50 text-green-600 text-xs font-medium rounded-xl flex items-center gap-2 border border-green-100 overflow-hidden"
-                >
-                    <CheckCircle2 size={16} /> {successMsg}
-                </motion.div>
-            )}
-        </AnimatePresence>
-
-        <AnimatePresence mode="wait">
-        {viewState === "forgot" ? (
-            /* --- FORGOT PASSWORD FORM --- */
-            <motion.form 
-                key="forgot" 
-                initial={{ opacity: 0, x: 20 }} 
-                animate={{ opacity: 1, x: 0 }} 
-                exit={{ opacity: 0, x: -20 }} 
-                onSubmit={handlePasswordReset} 
-                className="space-y-4"
-            >
-                 <div className="relative group">
-                    <Mail className="absolute left-3 top-3 text-gray-400 group-focus-within:text-indigo-500 transition" size={20} />
-                    <input 
-                        type="email" 
-                        placeholder="Enter your email" 
-                        className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20" 
-                        value={email} 
-                        onChange={(e) => setEmail(e.target.value)} 
-                        required 
-                    />
-                </div>
-
-                <motion.button 
-                    whileTap={{ scale: 0.98 }} 
-                    type="submit" 
-                    disabled={loading} 
-                    className="w-full bg-black text-white py-3 rounded-xl font-bold shadow-lg hover:opacity-90 transition flex items-center justify-center gap-2"
-                >
-                    {loading ? <Loader2 className="animate-spin" /> : "Send Reset Link"}
-                </motion.button>
-
-                <button 
-                    type="button" 
-                    onClick={() => { setViewState("login"); setError(""); setSuccessMsg(""); }} 
-                    className="w-full text-gray-500 text-sm font-medium py-2 hover:text-gray-800 transition flex items-center justify-center gap-1"
-                >
-                    <ArrowLeft size={14} /> Back to Sign In
-                </button>
-            </motion.form>
-        ) : (
-            /* --- LOGIN / SIGNUP FORM --- */
-            <motion.form 
-                key="main" 
-                initial={{ opacity: 0, x: -20 }} 
-                animate={{ opacity: 1, x: 0 }} 
-                exit={{ opacity: 0, x: 20 }} 
-                onSubmit={handleSubmit} 
-                className="space-y-4"
-            >
-                <AnimatePresence>
-                {viewState === "signup" && (
-                    <motion.div 
-                        initial={{ height: 0, opacity: 0 }} 
-                        animate={{ height: "auto", opacity: 1 }} 
-                        exit={{ height: 0, opacity: 0 }} 
-                        className="relative group overflow-hidden"
+      {/* --- SAVED ACCOUNTS VIEW --- */}
+      {showSavedAccounts && savedAccounts.length > 0 ? (
+          <div className="bg-white w-full max-w-sm p-8 rounded-lg border border-gray-300 shadow-sm text-center">
+             <img src="/logo.png" alt="ShayariGram" className="h-12 mx-auto mb-8" />
+             
+             <div className="space-y-4 mb-8">
+                {savedAccounts.map(acc => (
+                    <div 
+                        key={acc.uid} 
+                        onClick={() => handleSavedAccountClick(acc)}
+                        className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 transition shadow-sm group"
                     >
-                        <User className="absolute left-3 top-3 text-gray-400 group-focus-within:text-indigo-500 transition" size={20} />
-                        <input 
-                            type="text" 
-                            placeholder="Choose Username" 
-                            className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20" 
-                            value={username} 
-                            onChange={(e) => setUsername(e.target.value.replace(/\s/g, '').toLowerCase())} 
-                            required 
-                        />
-                    </motion.div>
-                )}
-                </AnimatePresence>
-
-                <div className="relative group">
-                    <Mail className="absolute left-3 top-3 text-gray-400 group-focus-within:text-indigo-500 transition" size={20} />
-                    <input 
-                        type="email" 
-                        placeholder="Email Address" 
-                        className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20" 
-                        value={email} 
-                        onChange={(e) => setEmail(e.target.value)} 
-                        required 
-                    />
-                </div>
-
-                <div className="relative group">
-                    <Lock className="absolute left-3 top-3 text-gray-400 group-focus-within:text-indigo-500 transition" size={20} />
-                    <input 
-                        type="password" 
-                        placeholder="Password" 
-                        className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20" 
-                        value={password} 
-                        onChange={(e) => setPassword(e.target.value)} 
-                        required 
-                        minLength={6} 
-                    />
-                </div>
-
-                {viewState === "login" && (
-                    <div className="flex justify-end">
-                        <button 
-                            type="button" 
-                            onClick={() => { setViewState("forgot"); setError(""); }} 
-                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition"
-                        >
-                            Forgot Password?
+                        <div className="flex items-center gap-3">
+                            {acc.photoURL ? (
+                                <img src={acc.photoURL} alt={acc.username} className="w-12 h-12 rounded-full object-cover" />
+                            ) : (
+                                <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center font-bold text-gray-500">
+                                    {acc.username[0].toUpperCase()}
+                                </div>
+                            )}
+                            <div className="text-left">
+                                <h3 className="font-bold text-sm text-gray-900">{acc.username}</h3>
+                                <p className="text-xs text-gray-400">Saved</p>
+                            </div>
+                        </div>
+                        
+                        {/* Remove Button */}
+                        <button onClick={(e) => removeAccount(e, acc.uid)} className="p-2 text-gray-400 hover:text-red-500">
+                            <X size={18} />
                         </button>
                     </div>
+                ))}
+             </div>
+
+             <button 
+                onClick={() => setShowSavedAccounts(false)} 
+                className="text-blue-500 font-bold text-sm mb-4 block w-full"
+             >
+                Switch Accounts
+             </button>
+             
+             <button 
+                onClick={() => setShowSavedAccounts(false)} 
+                className="text-blue-900 font-bold text-sm"
+             >
+                Sign Up
+             </button>
+          </div>
+      ) : (
+
+      /* --- REGULAR LOGIN FORM --- */
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white w-full max-w-sm border border-gray-300 shadow-sm rounded-none sm:rounded-lg overflow-hidden"
+      >
+        <div className="p-8 pb-4">
+            <div className="flex justify-center mb-8">
+                <img src="/logo.png" alt="ShayariGram" className="h-12 object-contain" />
+            </div>
+
+            <form onSubmit={handleAuth} className="flex flex-col gap-3">
+                
+                {/* Email / Username Input */}
+                <input 
+                    type={isLogin ? "text" : "email"}
+                    placeholder={isLogin ? "Phone number, username, or email" : "Mobile Number or Email"}
+                    className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
+                    value={isLogin ? emailOrUser : email}
+                    onChange={(e) => isLogin ? setEmailOrUser(e.target.value) : setEmail(e.target.value)}
+                    required 
+                />
+
+                {!isLogin && (
+                    <>
+                        <input 
+                            type="text" 
+                            placeholder="Full Name" 
+                            className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
+                            value={fullName}
+                            onChange={(e) => setFullName(e.target.value)}
+                            required 
+                        />
+                        <input 
+                            type="text" 
+                            placeholder="Username" 
+                            className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/\s/g, ''))}
+                            required 
+                        />
+                    </>
                 )}
 
-                <motion.button 
-                    whileHover={{ scale: 1.02 }} 
-                    whileTap={{ scale: 0.98 }} 
-                    type="submit" 
-                    disabled={loading} 
-                    className="w-full bg-gradient-to-r from-indigo-600 to-pink-600 text-white py-3 rounded-xl font-bold shadow-lg hover:opacity-90 transition flex items-center justify-center gap-2"
-                >
-                    {loading ? <Loader2 className="animate-spin" /> : (viewState === "signup" ? "Create Account" : "Sign In")}
-                </motion.button>
+                <input 
+                    type="password" 
+                    placeholder="Password" 
+                    className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required 
+                />
 
-                <div className="mt-6 text-center">
-                    <p className="text-sm text-gray-500">
-                        {viewState === "signup" ? "Already have an account?" : "Don't have an account?"}
-                        <button 
-                            type="button" 
-                            onClick={() => { setViewState(viewState === "signup" ? "login" : "signup"); setError(""); }} 
-                            className="ml-2 font-bold text-indigo-600 hover:underline"
-                        >
-                            {viewState === "signup" ? "Sign In" : "Sign Up"}
-                        </button>
-                    </p>
+                <button 
+                    type="submit" 
+                    disabled={loading}
+                    className="w-full text-white bg-blue-500 hover:bg-blue-600 focus:ring-4 focus:ring-blue-300 font-bold rounded-lg text-sm px-5 py-1.5 mt-2 focus:outline-none transition disabled:opacity-50"
+                >
+                    {loading ? "Processing..." : (isLogin ? "Log in" : "Sign up")}
+                </button>
+
+                {error && <p className="text-red-500 text-xs text-center mt-2">{error}</p>}
+
+                {/* Divider */}
+                <div className="flex items-center my-4">
+                    <div className="flex-1 h-px bg-gray-300"></div>
+                    <span className="px-4 text-xs font-bold text-gray-500">OR</span>
+                    <div className="flex-1 h-px bg-gray-300"></div>
                 </div>
-            </motion.form>
-        )}
-        </AnimatePresence>
+
+                <button 
+                    type="button"
+                    onClick={handleGoogleLogin}
+                    className="flex items-center justify-center gap-2 text-blue-900 font-bold text-sm"
+                >
+                    <span className="text-lg">G</span> Log in with Google
+                </button>
+            </form>
+        </div>
+
+        {/* Bottom Box */}
+        <div className="p-6 border-t border-gray-300 bg-gray-50 text-center">
+            <p className="text-sm">
+                {isLogin ? "Don't have an account? " : "Have an account? "}
+                <button onClick={() => setIsLogin(!isLogin)} className="text-blue-500 font-bold">
+                    {isLogin ? "Sign up" : "Log in"}
+                </button>
+            </p>
+        </div>
       </motion.div>
+      )}
     </div>
   );
 };
