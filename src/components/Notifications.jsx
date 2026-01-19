@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, writeBatch, getDocs, doc, updateDoc, arrayUnion, setDoc, addDoc, serverTimestamp } from 'firebase/firestore'; 
-import { Heart, Bell, MessageCircle, User, UserPlus } from 'lucide-react'; 
+import { collection, query, where, onSnapshot, writeBatch, getDocs, doc, updateDoc, arrayUnion, setDoc, addDoc, serverTimestamp, deleteDoc, arrayRemove } from 'firebase/firestore'; 
+import { Heart, Bell, MessageCircle, User, UserPlus, Check, X } from 'lucide-react'; 
 
 const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
   const [notifications, setNotifications] = useState([]);
@@ -101,6 +101,38 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
       }
   };
 
+  // --- HANDLE REQUEST ACTION (Accept/Delete) ---
+  const handleRequestAction = async (notif, action) => {
+      const myRef = doc(db, "users", currentUser);
+      const senderRef = doc(db, "users", notif.fromUser);
+
+      try {
+          // Always remove the pending request first
+          await updateDoc(myRef, { pendingRequests: arrayRemove(notif.fromUser) });
+
+          if (action === 'accept') {
+              // 1. Add to followers list
+              await updateDoc(myRef, { followers: arrayUnion(notif.fromUser) });
+              await updateDoc(senderRef, { following: arrayUnion(currentUser) });
+
+              // 2. Update the notification itself to be a "follow" type so it persists as history
+              await updateDoc(doc(db, "notifications", notif.id), { 
+                  type: "follow", // Change type to standard follow
+                  read: true 
+              });
+              
+              // 3. Optional: Send a notification back saying "accepted request"? 
+              // Instagram usually just silently enables access, but let's stick to updating state.
+
+          } else {
+              // Reject: Just delete the notification entirely
+              await deleteDoc(doc(db, "notifications", notif.id));
+          }
+      } catch (err) {
+          console.error("Error handling request:", err);
+      }
+  };
+
   const formatTime = (timestamp) => {
     if (!timestamp) return "";
     const date = new Date(timestamp.seconds * 1000);
@@ -116,7 +148,7 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
   if (loading) return <div className="text-center py-20 text-gray-400">Loading alerts...</div>;
 
   return (
-    <div className="p-2 space-y-2 min-h-screen pb-20">
+    <div className="p-2 space-y-2 min-h-screen pb-20 bg-white">
       <h2 className="text-xl font-bold font-serif flex items-center gap-2 mb-4 px-2">
         <Bell className="fill-black" size={20} /> Notifications
       </h2>
@@ -151,17 +183,19 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
                 <div className={`absolute -bottom-1 -right-1 p-1 rounded-full border-2 border-white ${
                     note.type === 'like' ? 'bg-pink-100 text-pink-500' : 
                     note.type === 'follow' ? 'bg-blue-100 text-blue-500' : 
+                    note.type === 'follow_request' ? 'bg-gray-800 text-white' :
                     'bg-indigo-100 text-indigo-500'
                 }`}>
                     {note.type === 'like' && <Heart size={12} fill="currentColor" />}
                     {note.type === 'comment' && <MessageCircle size={12} fill="currentColor" />}
                     {note.type === 'follow' && <UserPlus size={12} fill="currentColor" />}
+                    {note.type === 'follow_request' && <User size={12} fill="currentColor" />}
                 </div>
             </div>
             
             <div className="flex-1 min-w-0">
               {/* TEXT CONTENT */}
-              <p className="text-sm text-gray-800 leading-snug">
+              <div className="text-sm text-gray-800 leading-snug">
                 <span 
                     className="font-bold text-black hover:underline cursor-pointer mr-1"
                     onClick={(e) => {
@@ -175,6 +209,7 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
                     {note.type === 'like' && 'liked your post.'}
                     {note.type === 'follow' && 'started following you.'}
                     {note.type === 'comment' && 'commented on your post:'}
+                    {note.type === 'follow_request' && 'requested to follow you.'}
                 </span>
                 
                 {/* Comment Snippet */}
@@ -183,9 +218,14 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
                         "{note.contentSnippet}"
                     </span>
                 )}
-              </p>
+              </div>
               
-              <div className="flex justify-between items-center mt-1.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between mt-1.5 gap-2">
+                {/* Timestamp */}
+                <span className="text-[10px] text-gray-400 font-medium tracking-wide">
+                    {formatTime(note.timestamp)}
+                </span>
+
                 {/* Like Snippet (Show text of post liked) */}
                 {note.type === 'like' && note.contentSnippet && (
                     <p className="text-[10px] text-gray-400 italic line-clamp-1 max-w-[150px]">
@@ -195,7 +235,7 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
 
                 {/* --- FOLLOW BACK BUTTON (Only for follow notifications) --- */}
                 {note.type === 'follow' && (
-                    <div className="ml-auto mr-2">
+                    <div className="ml-auto">
                         {!myFollowing.includes(note.fromUser) ? (
                             <button 
                                 onClick={(e) => {
@@ -213,16 +253,35 @@ const Notifications = ({ currentUser, onPostClick, onProfileClick }) => {
                         )}
                     </div>
                 )}
-                
-                {/* Timestamp */}
-                <span className={`text-[10px] text-gray-400 font-medium tracking-wide ${note.type !== 'follow' ? 'ml-auto' : ''}`}>
-                    {formatTime(note.timestamp)}
-                </span>
+
+                {/* --- FOLLOW REQUEST BUTTONS (Accept/Delete) --- */}
+                {note.type === 'follow_request' && (
+                    <div className="flex gap-2 ml-auto">
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                handleRequestAction(note, 'accept');
+                            }} 
+                            className="bg-blue-600 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg hover:bg-blue-700 transition shadow-sm"
+                        >
+                            Confirm
+                        </button>
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                handleRequestAction(note, 'reject');
+                            }} 
+                            className="bg-gray-100 text-gray-700 text-[10px] font-bold px-3 py-1.5 rounded-lg hover:bg-gray-200 transition border border-gray-200"
+                        >
+                            Delete
+                        </button>
+                    </div>
+                )}
               </div>
             </div>
             
             {/* THUMBNAIL IMAGE (If post has one and it's not a follow) */}
-            {note.image && note.type !== 'follow' && (
+            {note.image && note.type !== 'follow' && note.type !== 'follow_request' && (
                 <img src={note.image} alt="Post" className="w-10 h-10 rounded-lg object-cover border border-gray-100 shadow-sm shrink-0" />
             )}
           </div>

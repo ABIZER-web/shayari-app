@@ -243,7 +243,6 @@ const PostShayari = ({ username }) => {
       className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-purple-100 relative font-sans w-full"
     >
       <canvas ref={canvasRef} className="hidden"></canvas>
-      <h3 className="text-xl font-bold text-gray-800 mb-4 font-serif">Create Post</h3>
       
       <form onSubmit={handleSubmit} className="space-y-5">
         
