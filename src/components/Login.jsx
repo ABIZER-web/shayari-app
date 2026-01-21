@@ -2,16 +2,18 @@ import { useState, useEffect } from 'react';
 import { auth, db, googleProvider } from '../firebase';
 import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, UserPlus, LogIn, ChevronRight } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { X, ChevronLeft } from 'lucide-react';
 
 const Login = ({ onLogin }) => {
-  const [isLogin, setIsLogin] = useState(true); // Toggle Login/Signup
-  const [emailOrUser, setEmailOrUser] = useState(""); // Can be email OR username
-  const [email, setEmail] = useState("");
+  // State for toggling Login vs Signup
+  const [isLogin, setIsLogin] = useState(true);
+  
+  const [emailOrUser, setEmailOrUser] = useState(""); // For Login
+  const [email, setEmail] = useState("");             // For Signup
+  const [username, setUsername] = useState("");       // For Signup
   const [password, setPassword] = useState("");
-  const [username, setUsername] = useState("");
-  const [fullName, setFullName] = useState("");
+  
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   
@@ -19,70 +21,76 @@ const Login = ({ onLogin }) => {
   const [savedAccounts, setSavedAccounts] = useState([]);
   const [showSavedAccounts, setShowSavedAccounts] = useState(true);
 
-  // 1. Load Saved Accounts on Mount
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem('shayari_saved_accounts') || "[]");
     setSavedAccounts(saved);
     if (saved.length === 0) setShowSavedAccounts(false);
   }, []);
 
-  // 2. HELPER: Save Account to LocalStorage (for Switch Account)
-  const saveAccountLocally = (user) => {
+  // --- 1. SAVE ACCOUNT HELPER ---
+  const saveAccountLocally = (user, savedPassword = null) => {
+    const existing = JSON.parse(localStorage.getItem('shayari_saved_accounts') || "[]");
+    
     const newAccount = {
         uid: user.uid,
         username: user.displayName || "User",
         photoURL: user.photoURL,
-        email: user.email // Needed for quick login pre-fill
+        email: user.email,
+        password: savedPassword ? btoa(savedPassword) : null 
     };
 
-    const existing = JSON.parse(localStorage.getItem('shayari_saved_accounts') || "[]");
-    // Remove if already exists to update it to the top
     const filtered = existing.filter(acc => acc.uid !== user.uid);
     const updated = [newAccount, ...filtered];
     
     localStorage.setItem('shayari_saved_accounts', JSON.stringify(updated));
+    setSavedAccounts(updated);
   };
 
-  // 3. LOGIN LOGIC (Username OR Email)
+  // --- 2. AUTH HANDLER ---
   const handleAuth = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setError("");
     setLoading(true);
 
     try {
       if (isLogin) {
-        // --- LOGIN MODE ---
+        // --- LOGIN LOGIC ---
         let targetEmail = emailOrUser;
 
-        // A. Check if input is NOT an email (assume it's a username)
+        // If input is username (no @), find the email
         if (!emailOrUser.includes('@')) {
             const q = query(collection(db, "users"), where("username", "==", emailOrUser));
             const querySnapshot = await getDocs(q);
-            
-            if (querySnapshot.empty) {
-                throw new Error("Username not found.");
-            }
-            // Get the email associated with this username
+            if (querySnapshot.empty) throw new Error("Username not found.");
             targetEmail = querySnapshot.docs[0].data().email;
         }
 
-        // B. Sign In
         const userCredential = await signInWithEmailAndPassword(auth, targetEmail, password);
         const user = userCredential.user;
         
-        // C. Fetch Username from DB if missing in Auth
         let finalUsername = user.displayName;
         if (!finalUsername) {
             const userDoc = await getDoc(doc(db, "users", user.uid));
             if (userDoc.exists()) finalUsername = userDoc.data().username;
         }
 
-        saveAccountLocally({ ...user, displayName: finalUsername });
+        // Ask to save if new
+        const isAlreadySaved = savedAccounts.some(acc => acc.uid === user.uid && acc.password);
+        if (!isAlreadySaved) {
+            setTimeout(() => {
+                if(window.confirm("Save login info on this device?\n\nNext time you can log in directly without entering your password.")) {
+                    saveAccountLocally({ ...user, displayName: finalUsername }, password);
+                } else {
+                    saveAccountLocally({ ...user, displayName: finalUsername }, null);
+                }
+            }, 500);
+        }
         onLogin(finalUsername);
-      
+
       } else {
-        // --- SIGNUP MODE ---
-        // 1. Check Username Availability
+        // --- SIGNUP LOGIC (Restored) ---
+        
+        // 1. Check Username
         const q = query(collection(db, "users"), where("username", "==", username));
         const usernameCheck = await getDocs(q);
         if (!usernameCheck.empty) throw new Error("Username is already taken.");
@@ -94,12 +102,12 @@ const Login = ({ onLogin }) => {
         // 3. Update Profile
         await updateProfile(user, { displayName: username });
 
-        // 4. Create User Document
+        // 4. Save to Firestore
         await setDoc(doc(db, "users", user.uid), {
           uid: user.uid,
           username: username,
           email: email,
-          fullName: fullName,
+          fullName: "", 
           photoURL: "",
           bio: "",
           followers: [],
@@ -108,7 +116,12 @@ const Login = ({ onLogin }) => {
           createdAt: serverTimestamp()
         });
 
-        saveAccountLocally({ ...user, displayName: username });
+        // 5. Save Locally
+        if(window.confirm("Save login info for this new account?")) {
+            saveAccountLocally({ ...user, displayName: username }, password);
+        } else {
+            saveAccountLocally({ ...user, displayName: username }, null);
+        }
         onLogin(username);
       }
     } catch (err) {
@@ -119,18 +132,15 @@ const Login = ({ onLogin }) => {
     }
   };
 
-  // 4. GOOGLE LOGIN
   const handleGoogleLogin = async () => {
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
       
-      // Check if user exists
       const userDoc = await getDoc(doc(db, "users", user.uid));
-      let finalUsername = user.displayName.replace(/\s+/g, '').toLowerCase();
+      let finalUsername = user.displayName ? user.displayName.replace(/\s+/g, '').toLowerCase() : "user";
 
       if (!userDoc.exists()) {
-        // Create new doc if first time
         await setDoc(doc(db, "users", user.uid), {
           uid: user.uid,
           username: finalUsername,
@@ -147,19 +157,39 @@ const Login = ({ onLogin }) => {
           finalUsername = userDoc.data().username;
       }
       
-      saveAccountLocally({ ...user, displayName: finalUsername });
+      saveAccountLocally({ ...user, displayName: finalUsername }, null);
       onLogin(finalUsername);
     } catch (err) {
       setError("Google Login Failed");
     }
   };
 
-  // 5. CLICK SAVED ACCOUNT
-  const handleSavedAccountClick = (acc) => {
-      // Pre-fill and switch to login view
-      setShowSavedAccounts(false);
-      setIsLogin(true);
-      setEmailOrUser(acc.username); // Or acc.email, but username looks nicer
+  // Handle clicking a saved account tile
+  const handleSavedAccountClick = async (acc) => {
+      if (acc.password) {
+          setLoading(true);
+          try {
+             const savedPass = atob(acc.password);
+             setIsLogin(true);
+             setEmailOrUser(acc.username);
+             setPassword(savedPass);
+             await signInWithEmailAndPassword(auth, acc.email, savedPass);
+             onLogin(acc.username);
+          } catch (e) {
+             console.error("Auto login failed", e);
+             setError("Session expired. Please log in again.");
+             setShowSavedAccounts(false);
+             setIsLogin(true);
+             setEmailOrUser(acc.username);
+          } finally {
+             setLoading(false);
+          }
+      } else {
+          // No password, just fill username and go to login
+          setShowSavedAccounts(false);
+          setIsLogin(true);
+          setEmailOrUser(acc.username);
+      }
   };
 
   const removeAccount = (e, uid) => {
@@ -173,10 +203,9 @@ const Login = ({ onLogin }) => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       
-      {/* --- SAVED ACCOUNTS VIEW --- */}
       {showSavedAccounts && savedAccounts.length > 0 ? (
           <div className="bg-white w-full max-w-sm p-8 rounded-lg border border-gray-300 shadow-sm text-center">
-             <img src="/logo.png" alt="ShayariGram" className="h-12 mx-auto mb-8" />
+             <img src="/logo.png" alt="ShayariGram" className="h-24 mx-auto mb-8" />
              
              <div className="space-y-4 mb-8">
                 {savedAccounts.map(acc => (
@@ -195,11 +224,12 @@ const Login = ({ onLogin }) => {
                             )}
                             <div className="text-left">
                                 <h3 className="font-bold text-sm text-gray-900">{acc.username}</h3>
-                                <p className="text-xs text-gray-400">Saved</p>
+                                <p className="text-xs text-gray-400">
+                                    {acc.password ? "Saved • Tap to login" : "Saved"}
+                                </p>
                             </div>
                         </div>
                         
-                        {/* Remove Button */}
                         <button onClick={(e) => removeAccount(e, acc.uid)} className="p-2 text-gray-400 hover:text-red-500">
                             <X size={18} />
                         </button>
@@ -207,15 +237,17 @@ const Login = ({ onLogin }) => {
                 ))}
              </div>
 
+             {/* SWITCH ACCOUNTS -> GO TO LOGIN */}
              <button 
-                onClick={() => setShowSavedAccounts(false)} 
+                onClick={() => { setShowSavedAccounts(false); setIsLogin(true); }} 
                 className="text-blue-500 font-bold text-sm mb-4 block w-full"
              >
                 Switch Accounts
              </button>
              
+             {/* SIGN UP -> GO TO SIGN UP */}
              <button 
-                onClick={() => setShowSavedAccounts(false)} 
+                onClick={() => { setShowSavedAccounts(false); setIsLogin(false); }} 
                 className="text-blue-900 font-bold text-sm"
              >
                 Sign Up
@@ -223,7 +255,7 @@ const Login = ({ onLogin }) => {
           </div>
       ) : (
 
-      /* --- REGULAR LOGIN FORM --- */
+      /* --- AUTH FORM (LOGIN OR SIGNUP) --- */
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -231,37 +263,40 @@ const Login = ({ onLogin }) => {
       >
         <div className="p-8 pb-4">
             <div className="flex justify-center mb-8">
-                <img src="/logo.png" alt="ShayariGram" className="h-12 object-contain" />
+                <img src="/logo.png" alt="ShayariGram" className="h-24 object-contain" />
             </div>
 
             <form onSubmit={handleAuth} className="flex flex-col gap-3">
                 
-                {/* Email / Username Input */}
-                <input 
-                    type={isLogin ? "text" : "email"}
-                    placeholder={isLogin ? "Phone number, username, or email" : "Mobile Number or Email"}
-                    className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
-                    value={isLogin ? emailOrUser : email}
-                    onChange={(e) => isLogin ? setEmailOrUser(e.target.value) : setEmail(e.target.value)}
-                    required 
-                />
+                {/* LOGIN: Phone/User/Email */}
+                {isLogin && (
+                    <input 
+                        type="text"
+                        placeholder="Phone number, username, or email"
+                        className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
+                        value={emailOrUser}
+                        onChange={(e) => setEmailOrUser(e.target.value)}
+                        required 
+                    />
+                )}
 
+                {/* SIGNUP: Username -> Email */}
                 {!isLogin && (
                     <>
-                        <input 
-                            type="text" 
-                            placeholder="Full Name" 
-                            className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
-                            value={fullName}
-                            onChange={(e) => setFullName(e.target.value)}
-                            required 
-                        />
                         <input 
                             type="text" 
                             placeholder="Username" 
                             className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
                             value={username}
                             onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/\s/g, ''))}
+                            required 
+                        />
+                         <input 
+                            type="email"
+                            placeholder="Mobile Number or Email"
+                            className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-sm focus:ring-1 focus:ring-gray-400 focus:outline-none block w-full p-2.5"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
                             required 
                         />
                     </>
@@ -286,7 +321,6 @@ const Login = ({ onLogin }) => {
 
                 {error && <p className="text-red-500 text-xs text-center mt-2">{error}</p>}
 
-                {/* Divider */}
                 <div className="flex items-center my-4">
                     <div className="flex-1 h-px bg-gray-300"></div>
                     <span className="px-4 text-xs font-bold text-gray-500">OR</span>
@@ -301,9 +335,18 @@ const Login = ({ onLogin }) => {
                     <span className="text-lg">G</span> Log in with Google
                 </button>
             </form>
+            
+            {savedAccounts.length > 0 && (
+                <button 
+                    onClick={() => setShowSavedAccounts(true)}
+                    className="w-full mt-6 text-xs text-gray-500 flex items-center justify-center gap-1 hover:text-black transition"
+                >
+                    <ChevronLeft size={14} /> Back to Saved Accounts
+                </button>
+            )}
+
         </div>
 
-        {/* Bottom Box */}
         <div className="p-6 border-t border-gray-300 bg-gray-50 text-center">
             <p className="text-sm">
                 {isLogin ? "Don't have an account? " : "Have an account? "}

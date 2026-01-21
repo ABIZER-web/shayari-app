@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { db, storage } from '../firebase'; // Ensure storage is imported
-import { collection, addDoc, serverTimestamp, getDocs, writeBatch } from 'firebase/firestore'; 
+import { db, storage } from '../firebase'; 
+import { collection, addDoc, serverTimestamp, getDocs, writeBatch, doc, updateDoc } from 'firebase/firestore'; 
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { 
   Send, 
@@ -28,19 +28,17 @@ const ASPECT_RATIOS = [
   { id: '16/9', label: 'Wide', icon: Monitor, desc: 'YouTube' },
 ];
 
-const CATEGORIES = ["General", "Love", "Sad", "Poetry", "Quotes", "Motivation", "Life", "Friendship"];
-
-// --- BulkSeeder Placeholder (Admin Only) ---
-const BulkSeeder = () => <div className="p-4 bg-gray-50 rounded-xl text-center text-xs text-gray-400 border border-dashed border-gray-300">Bulk Seeder Component Placeholder</div>;
+// --- BulkSeeder Placeholder ---
+const BulkSeeder = () => <div className="p-4 bg-gray-50 rounded-xl text-center text-xs text-gray-400 border border-dashed border-gray-300">Bulk Seeder Available</div>;
 
 const PostShayari = ({ username }) => {
   const [content, setContent] = useState('');
-  const [category, setCategory] = useState('General');
-  const [aspectRatio, setAspectRatio] = useState('1/1'); // Default Square
+  // Category state removed (hardcoded to 'General' on submit)
+  const [aspectRatio, setAspectRatio] = useState('1/1'); 
   
-  const [selectedFile, setSelectedFile] = useState(null); // Actual File Object
-  const [previewImage, setPreviewImage] = useState(null); // Data URL for preview
-  const [originalImagePreview, setOriginalImagePreview] = useState(null); // Backup for "Remove Text"
+  const [selectedFile, setSelectedFile] = useState(null); 
+  const [previewImage, setPreviewImage] = useState(null); 
+  const [originalImagePreview, setOriginalImagePreview] = useState(null); 
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -58,16 +56,16 @@ const PostShayari = ({ username }) => {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
-      if (file.size > 5 * 1024 * 1024) { // 5MB Limit
+      if (file.size > 5 * 1024 * 1024) { 
         alert("Image is too large (Max 5MB)");
         return; 
       }
-      setSelectedFile(file); // Save file for upload
+      setSelectedFile(file); 
       
       const reader = new FileReader();
       reader.onloadend = () => {
         setPreviewImage(reader.result);
-        setOriginalImagePreview(reader.result); // Save backup
+        setOriginalImagePreview(reader.result); 
         setIsTextOnImage(false);
       };
       reader.readAsDataURL(file);
@@ -114,23 +112,24 @@ const PostShayari = ({ username }) => {
       // Draw Image
       ctx.drawImage(img, 0, 0);
       
-      // Overlay
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'; 
+      // Dark Overlay for readability
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; 
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       
       // Text Settings
-      const fontSize = Math.max(32, canvas.width / 22); 
+      const fontSize = Math.max(32, canvas.width / 20); 
       ctx.font = `italic bold ${fontSize}px serif`; 
       ctx.fillStyle = '#FFFFFF';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
-      ctx.shadowBlur = 10;
-      ctx.shadowOffsetX = 3;
-      ctx.shadowOffsetY = 3;
+      // Add shadow for better contrast
+      ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
+      ctx.shadowBlur = 15;
+      ctx.shadowOffsetX = 4;
+      ctx.shadowOffsetY = 4;
 
       // Text Wrapping Logic
-      const padding = 40; 
+      const padding = 60; 
       const maxWidth = canvas.width - (padding * 2);
       const paragraphs = content.split('\n'); 
       let finalLines = [];
@@ -152,7 +151,7 @@ const PostShayari = ({ username }) => {
         finalLines.push(line);
       });
       
-      const lineHeight = fontSize * 1.5;
+      const lineHeight = fontSize * 1.6;
       const totalTextHeight = finalLines.length * lineHeight;
       let startY = (canvas.height - totalTextHeight) / 2 + (lineHeight / 2); 
 
@@ -161,7 +160,7 @@ const PostShayari = ({ username }) => {
       });
       
       // Save Result
-      setPreviewImage(canvas.toDataURL('image/jpeg', 0.85));
+      setPreviewImage(canvas.toDataURL('image/jpeg', 0.9));
       setIsGenerating(false);
       setIsTextOnImage(true);
       setTextChanged(false);
@@ -190,48 +189,49 @@ const PostShayari = ({ username }) => {
 
     setIsSubmitting(true);
     try {
-      let finalImageUrl = null;
+      // 1. Create the Document FIRST to get an ID
+      const docRef = await addDoc(collection(db, "shayaris"), {
+        content: content, 
+        author: username || "Anonymous", 
+        category: "General", // Default hidden category
+        image: null, 
+        isTextOnImage: isTextOnImage,
+        aspectRatio: aspectRatio,
+        likes: 0,
+        saveCount: 0,
+        shares: 0,
+        comments: [], 
+        likedBy: [], // Initialize empty array for likes
+        timestamp: serverTimestamp()
+      });
 
+      // 2. Handle Image Upload (if exists)
       if (previewImage) {
-        // 1. Determine which image to upload (Original File OR Canvas Result)
         let blobToUpload = null;
 
         if (isTextOnImage) {
-            // Convert Data URL (Canvas) to Blob
             const response = await fetch(previewImage);
             blobToUpload = await response.blob();
         } else {
-            // Use Original File
             blobToUpload = selectedFile;
         }
 
-        // 2. Upload to Firebase Storage
+        // Upload to Storage
         const fileName = `${Date.now()}_post.jpg`;
-        const storageRef = ref(storage, `posts/${username}/${fileName}`);
+        const storageRef = ref(storage, `shayaris/${docRef.id}/${fileName}`);
         const snapshot = await uploadBytes(storageRef, blobToUpload);
-        finalImageUrl = await getDownloadURL(snapshot.ref);
-      }
+        const finalImageUrl = await getDownloadURL(snapshot.ref);
 
-      // 3. Save Metadata to Firestore
-      await addDoc(collection(db, "shayaris"), {
-        content: content, 
-        author: username || "Anonymous",
-        category: category,
-        image: finalImageUrl, 
-        isTextOnImage: isTextOnImage,
-        aspectRatio: aspectRatio, // Save the selected ratio
-        likes: 0,
-        saveCount: 0,
-        timestamp: serverTimestamp()
-      });
+        // Update the document with the image URL
+        await updateDoc(doc(db, "shayaris", docRef.id), { image: finalImageUrl });
+      }
       
       clearAll();
-      setCategory('General');
       alert("Post created successfully!");
       
     } catch (err) {
-      console.error(err);
-      alert("Failed to create post. Try again.");
+      console.error("Submission Error:", err);
+      alert("Failed to create post. Check console.");
     }
     setIsSubmitting(false);
   };
@@ -246,24 +246,7 @@ const PostShayari = ({ username }) => {
       
       <form onSubmit={handleSubmit} className="space-y-5">
         
-        {/* 1. Category Selector */}
-        <div>
-          <label className="block text-xs font-bold text-gray-400 mb-2 uppercase tracking-wide">Select Category</label>
-          <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
-            {CATEGORIES.map(cat => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setCategory(cat)}
-                className={`px-4 py-2 rounded-full text-sm font-bold border transition-all whitespace-nowrap ${category === cat ? 'bg-black text-white border-black shadow-md scale-105' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* 2. Ratio Selector (NEW) */}
+        {/* 1. Ratio Selector */}
         <div>
           <label className="block text-xs font-bold text-gray-400 mb-2 uppercase tracking-wide">Select Post Format</label>
           <div className="grid grid-cols-5 gap-2">
@@ -285,16 +268,16 @@ const PostShayari = ({ username }) => {
           </div>
         </div>
 
-        {/* 3. Text Area */}
+        {/* 2. Text Area */}
         <textarea
-          placeholder={`Write something beautiful in ${category}...`}
+          placeholder="Write something beautiful..."
           className="w-full p-4 border border-gray-200 rounded-2xl h-32 md:h-40 focus:outline-none focus:border-purple-500 bg-gray-50/50 resize-none font-serif text-lg transition placeholder:text-gray-400"
           value={content}
           onChange={handleTextChange}
           maxLength={500}
         />
 
-        {/* 4. Image Preview Area */}
+        {/* 3. Image Preview Area */}
         <AnimatePresence>
         {previewImage && (
           <motion.div 
@@ -302,7 +285,7 @@ const PostShayari = ({ username }) => {
             animate={{ opacity: 1, scale: 1 }} 
             exit={{ opacity: 0, scale: 0.9 }} 
             className="relative w-full bg-gray-100 rounded-2xl overflow-hidden shadow-inner group border border-gray-200 flex items-center justify-center"
-            style={{ aspectRatio: aspectRatio }} // Apply selected ratio to container
+            style={{ aspectRatio: aspectRatio }} 
           >
             <img 
                 src={previewImage} 
@@ -349,7 +332,7 @@ const PostShayari = ({ username }) => {
           <motion.button 
             whileHover={{ scale: 1.05 }} 
             whileTap={{ scale: 0.95 }}
-            disabled={isSubmitting || isGenerating}
+            disabled={isSubmitting || isGenerating || (!content && !selectedFile)}
             className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-8 py-2.5 rounded-full font-bold flex items-center gap-2 hover:opacity-90 transition disabled:opacity-50 shadow-md text-base"
           >
             {isSubmitting ? <><Loader2 size={18} className="animate-spin"/> Posting...</> : <>Post <Send size={18} className="ml-1" /></>}
