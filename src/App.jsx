@@ -115,7 +115,14 @@ function App() {
   const handleAcceptCall = async () => {
       if (!incomingCall) return;
       await updateDoc(doc(db, "calls", incomingCall.id), { status: 'connected' });
-      setActiveCallSession({ id: incomingCall.id, isCaller: false });
+      
+      // ✅ UPDATED: Pass 'type' (audio/video) to session
+      setActiveCallSession({ 
+          id: incomingCall.id, 
+          isCaller: false,
+          type: incomingCall.type 
+      });
+      
       setIncomingCall(null);
   };
 
@@ -196,7 +203,17 @@ function App() {
     <div className="min-h-screen bg-white text-gray-900 font-sans flex flex-col md:flex-row">
       
       {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onLogout={handleLogout} />}
-      {activeCallSession && <VideoCall callId={activeCallSession.id} currentUser={currentUser} isCaller={activeCallSession.isCaller} onEndCall={() => setActiveCallSession(null)} />}
+      
+      {/* ✅ UPDATED: Pass 'callType' to VideoCall */}
+      {activeCallSession && (
+        <VideoCall 
+            callId={activeCallSession.id} 
+            currentUser={currentUser} 
+            isCaller={activeCallSession.isCaller} 
+            callType={activeCallSession.type}
+            onEndCall={() => setActiveCallSession(null)} 
+        />
+      )}
 
       <AnimatePresence>
         {incomingCall && !activeCallSession && (
@@ -261,14 +278,13 @@ function App() {
 
       {/* --- MAIN CONTENT AREA (Full Width, Centered) --- */}
       <div className={`flex-1 md:ml-[80px] lg:ml-[245px] bg-white min-h-screen transition-all duration-300 ${isFullScreenMobile ? 'pt-0 pb-0' : 'pt-[65px] pb-[65px] md:pt-0 md:pb-0'}`}>
-        {/* REMOVED MAX-WIDTH CONSTRAINT FOR BETTER FLOW */}
         <div className="w-full h-full flex justify-center"> 
             <AnimatePresence mode="wait">
                 {view === "home" && (
                   <motion.div key="home" initial="initial" animate="in" exit="out" variants={pageVariants} transition={pageTransition} className="w-full max-w-[600px] py-4 md:py-8 px-2 md:px-0">
                     <Dashboard />
                     <div className="mt-6">
-                        <ShayariFeed onProfileClick={(uid) => handleNav('profile', uid)} />
+                        <ShayariFeed onProfileClick={(uid) => handleNav('profile', uid)} onPostClick={(id) => handleNav('singlePost', null, null, id)} />
                     </div>
                   </motion.div>
                 )}
@@ -277,7 +293,10 @@ function App() {
                 {view === "post" && <motion.div key="post" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><h2 className="text-xl font-bold mb-6 text-center md:text-left">Create new post</h2><PostShayari username={currentUser} /></div></motion.div>}
                 {view === "profile" && <motion.div key="profile" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-8 px-0 w-full max-w-4xl"><ProfilePage profileUser={viewingProfile} currentUser={currentUser} onBack={handleBack} onPostClick={(id) => handleNav('singlePost', null, null, id)} onNavigateToChat={(chatId) => handleNav('chat', null, chatId)} onProfileClick={(uid) => handleNav('profile', uid)} onLogout={handleLogout} /></motion.div>}
                 {view === "notifications" && <motion.div key="notifications" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:hidden pt-2 w-full"><Notifications currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onProfileClick={(uid) => handleNav('profile', uid)} /></motion.div>}
-                {view === "chat" && <motion.div key="chat" initial="initial" animate="in" exit="out" variants={pageVariants} className="h-full w-full md:p-6 max-w-6xl"><ChatPage currentUser={currentUser} initialChatId={activeChatId} onBack={handleBack} onCallStart={(callId) => setActiveCallSession({ id: callId, isCaller: true })} /></motion.div>}
+                
+                {/* ✅ UPDATED: Receive 'type' in ChatPage callback */}
+                {view === "chat" && <motion.div key="chat" initial="initial" animate="in" exit="out" variants={pageVariants} className="h-full w-full md:p-6 max-w-6xl"><ChatPage currentUser={currentUser} initialChatId={activeChatId} onBack={handleBack} onCallStart={(callId, type) => setActiveCallSession({ id: callId, isCaller: true, type: type })} /></motion.div>}
+                
                 {view === "singlePost" && <motion.div key="singlePost" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><SinglePostView postId={viewingPostId} onBack={handleBack} onProfileClick={(uid) => handleNav('profile', uid)} /></div></motion.div>}
             </AnimatePresence>
         </div>

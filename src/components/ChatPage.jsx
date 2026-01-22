@@ -7,7 +7,7 @@ import {
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { 
     ArrowLeft, Edit, MessageCircle, X, Phone, Video, Camera, Info, 
-    Image as ImageIcon, Heart, MoreVertical, Trash2, Copy, Forward 
+    Image as ImageIcon, Mic, MoreVertical, Trash2, Copy, Forward, StopCircle, Download 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -30,6 +30,11 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
   const [otherUserStatus, setOtherUserStatus] = useState("offline");
   const [isOtherTyping, setIsOtherTyping] = useState(false);
   
+  // Audio Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
   // Message Actions State
   const [selectedMessageId, setSelectedMessageId] = useState(null);
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
@@ -179,6 +184,33 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
       setSelectedMessageId(null);
   };
 
+  // ⚡ NEW: DOWNLOAD IMAGE FUNCTION
+  const handleDownloadImage = async () => {
+      const msg = messages.find(m => m.id === selectedMessageId);
+      if(msg && msg.image) {
+          try {
+              // Fetch the image as a blob to force download
+              const response = await fetch(msg.image);
+              const blob = await response.blob();
+              const url = window.URL.createObjectURL(blob);
+              
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = `chat_image_${Date.now()}.jpg`;
+              document.body.appendChild(link);
+              link.click();
+              
+              window.URL.revokeObjectURL(url);
+              document.body.removeChild(link);
+          } catch (error) {
+              console.error("Download failed:", error);
+              // Fallback: Open in new tab
+              window.open(msg.image, '_blank');
+          }
+      }
+      setSelectedMessageId(null);
+  };
+
   const handleForwardStart = () => {
       const msg = messages.find(m => m.id === selectedMessageId);
       if(msg) {
@@ -189,7 +221,6 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
       }
   };
 
-  // ⚡ FIXED FORWARDING LOGIC
   const handleForwardSend = async (targetUser) => {
       if(!messageToForward || !currentUser) return;
       
@@ -198,7 +229,6 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
           const chatRef = doc(db, "chats", chatId);
           const chatSnap = await getDoc(chatRef);
           
-          // 1. Create chat if it doesn't exist
           if (!chatSnap.exists()) {
             await setDoc(chatRef, {
                 participants: [currentUser, targetUser].sort(),
@@ -210,17 +240,16 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
             });
           }
 
-          // 2. Add the message (With safe defaults)
           await addDoc(collection(chatRef, "messages"), {
               text: messageToForward.text || "",
               image: messageToForward.image || null,
+              audio: messageToForward.audio || null,
               sender: currentUser,
               timestamp: serverTimestamp(),
-              type: messageToForward.type || 'text', // Default to text to prevent crash
+              type: messageToForward.type || 'text',
               isForwarded: true
           });
 
-          // 3. Update the chat list preview
           await updateDoc(chatRef, {
               lastMessage: "Forwarded message",
               lastMessageSender: currentUser,
@@ -228,11 +257,10 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
               isRead: false
           });
 
-          // 4. Reset UI and Open the chat so you see it sent
           setIsSearchOpen(false);
           setIsForwardMode(false);
           setMessageToForward(null);
-          setActiveChatId(chatId); // <--- JUMP TO THE CHAT
+          setActiveChatId(chatId); 
 
       } catch(err) { 
           console.error("Forward error:", err);
@@ -311,6 +339,64 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
       } catch (err) { console.error("Error uploading image:", err); }
   };
 
+  // --- AUDIO RECORDING HANDLERS ---
+  const toggleRecording = async () => {
+      if (isRecording) {
+          mediaRecorderRef.current.stop();
+          setIsRecording(false);
+      } else {
+          try {
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              mediaRecorderRef.current = new MediaRecorder(stream);
+              audioChunksRef.current = [];
+
+              mediaRecorderRef.current.ondataavailable = (event) => {
+                  if (event.data.size > 0) {
+                      audioChunksRef.current.push(event.data);
+                  }
+              };
+
+              mediaRecorderRef.current.onstop = async () => {
+                  const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                  await uploadAudio(audioBlob);
+                  stream.getTracks().forEach(track => track.stop());
+              };
+
+              mediaRecorderRef.current.start();
+              setIsRecording(true);
+          } catch (err) {
+              console.error("Error accessing microphone:", err);
+              alert("Microphone access denied or not available.");
+          }
+      }
+  };
+
+  const uploadAudio = async (audioBlob) => {
+      if (!activeChatId) return;
+      try {
+          const fileName = `${Date.now()}_voice.webm`;
+          const storageRef = ref(storage, `chat_audio/${activeChatId}/${fileName}`);
+          const snapshot = await uploadBytes(storageRef, audioBlob);
+          const downloadURL = await getDownloadURL(snapshot.ref);
+
+          const chatRef = doc(db, "chats", activeChatId);
+          await addDoc(collection(chatRef, "messages"), {
+              audio: downloadURL,
+              sender: currentUser,
+              timestamp: serverTimestamp(),
+              type: 'audio'
+          });
+
+          await setDoc(chatRef, {
+              lastMessage: "🎤 Voice Message",
+              lastMessageSender: currentUser,
+              isRead: false,
+              timestamp: serverTimestamp()
+          }, { merge: true });
+
+      } catch (err) { console.error("Error uploading audio:", err); }
+  };
+
   const startCall = async (type) => {
       const docRef = await addDoc(collection(db, "calls"), {
           caller: currentUser,
@@ -323,12 +409,10 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
   };
 
   const handleStartChat = async (targetUser) => {
-      // ⚡ CHECK FORWARD MODE FIRST
       if(isForwardMode) {
           handleForwardSend(targetUser);
           return;
       }
-      
       setIsSearchOpen(false);
       const chatId = [currentUser, targetUser].sort().join("_");
       const chatRef = doc(db, "chats", chatId);
@@ -388,7 +472,6 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
                                 {chat.lastMessageSender === currentUser ? `You: ${chat.lastMessage}` : chat.lastMessage || "Start a conversation"}
                             </p>
                         </div>
-                        {/* DELETE CHAT BUTTON */}
                         <button onClick={(e) => handleDeleteChat(e, chat.id)} className="absolute right-4 opacity-0 group-hover:opacity-100 p-2 text-gray-400 hover:text-red-500 transition"><Trash2 size={18} /></button>
                     </div>
                 ))
@@ -434,23 +517,40 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
                                     className={`flex ${isMe ? 'justify-end' : 'justify-start'} group relative`}
                                     onContextMenu={(e) => handleMessageLongPress(e, msg.id)}
                                 >
-                                    {/* CONTEXT MENU POPUP */}
                                     {selectedMessageId === msg.id && (
                                         <div 
                                             className="absolute z-50 bg-white shadow-xl border border-gray-100 rounded-lg p-1 flex flex-col min-w-[120px]"
                                             style={{ top: '100%', [isMe ? 'right' : 'left']: 0 }}
                                         >
-                                            <button onClick={handleCopyText} className="flex items-center gap-2 p-2 hover:bg-gray-50 text-sm text-gray-700 text-left rounded"><Copy size={14}/> Copy</button>
+                                            {/* TEXT OPTIONS */}
+                                            {msg.type === 'text' && <button onClick={handleCopyText} className="flex items-center gap-2 p-2 hover:bg-gray-50 text-sm text-gray-700 text-left rounded"><Copy size={14}/> Copy</button>}
+                                            
+                                            {/* IMAGE OPTIONS */}
+                                            {msg.type === 'image' && (
+                                                <button onClick={handleDownloadImage} className="flex items-center gap-2 p-2 hover:bg-gray-50 text-sm text-gray-700 text-left rounded">
+                                                    <Download size={14}/> Save Image
+                                                </button>
+                                            )}
+
                                             <button onClick={handleForwardStart} className="flex items-center gap-2 p-2 hover:bg-gray-50 text-sm text-gray-700 text-left rounded"><Forward size={14}/> Forward</button>
+                                            
                                             {isMe && <button onClick={handleDeleteMessage} className="flex items-center gap-2 p-2 hover:bg-red-50 text-sm text-red-600 text-left rounded"><Trash2 size={14}/> Delete</button>}
                                         </div>
                                     )}
 
                                     <div className={`max-w-[75%] px-4 py-2.5 text-[15px] leading-relaxed break-words shadow-sm cursor-pointer ${isMe ? 'bg-blue-600 text-white rounded-2xl rounded-br-sm' : 'bg-gray-100 text-gray-900 rounded-2xl rounded-bl-sm'}`}>
                                         {msg.isForwarded && <p className="text-[10px] opacity-70 mb-1 flex items-center gap-1 italic"><Forward size={10}/> Forwarded</p>}
-                                        {msg.type === 'image' ? <img src={msg.image} alt="Sent" className="rounded-lg max-w-full max-h-60 object-cover" /> : msg.text}
+                                        
+                                        {msg.type === 'image' ? (
+                                            <img src={msg.image} alt="Sent" className="rounded-lg max-w-full max-h-60 object-cover" />
+                                        ) : msg.type === 'audio' ? (
+                                            <div className="flex items-center gap-2 min-w-[200px]">
+                                                <audio controls src={msg.audio} className="h-8 w-full" />
+                                            </div>
+                                        ) : (
+                                            msg.text
+                                        )}
                                     </div>
-                                    {/* MESSAGE MENU TRIGGER (MOBILE) */}
                                     <button onClick={(e) => handleMessageLongPress(e, msg.id)} className="md:hidden p-2 opacity-50"><MoreVertical size={14}/></button>
                                 </motion.div>
                             );
@@ -474,9 +574,16 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
                         <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" hidden />
                         <div className="p-2 bg-blue-500 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition text-white" onClick={() => fileInputRef.current.click()}><Camera size={18} /></div>
                         <input value={newMessage} onChange={handleInputChange} placeholder="Message..." className="flex-1 bg-transparent text-gray-900 placeholder-gray-500 text-sm focus:outline-none px-2 h-8"/>
-                        {newMessage.trim() ? <button type="submit" className="text-blue-600 font-bold text-sm px-3 hover:text-blue-700">Send</button> : (
+                        
+                        {newMessage.trim() ? (
+                            <button type="submit" className="text-blue-600 font-bold text-sm px-3 hover:text-blue-700">Send</button>
+                        ) : (
                             <div className="flex gap-3 px-3 text-gray-500 items-center">
-                                <ImageIcon size={22} className="cursor-pointer hover:text-gray-700" onClick={triggerFileInput} /><Heart size={22} className="cursor-pointer hover:text-gray-700" />
+                                <ImageIcon size={22} className="cursor-pointer hover:text-gray-700" onClick={triggerFileInput} />
+                                
+                                <button type="button" onClick={toggleRecording} className={`transition-all ${isRecording ? 'text-red-500 scale-110 animate-pulse' : 'text-gray-500 hover:text-gray-700'}`}>
+                                    {isRecording ? <StopCircle size={22} fill="currentColor"/> : <Mic size={22} />}
+                                </button>
                             </div>
                         )}
                     </form>

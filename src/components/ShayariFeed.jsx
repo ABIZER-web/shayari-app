@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { db } from '../firebase'; 
 import { 
     collection, query, orderBy, limit, onSnapshot, doc, updateDoc, 
-    arrayUnion, arrayRemove, getDoc, addDoc, serverTimestamp, getDocs 
+    arrayUnion, arrayRemove, getDoc, addDoc, serverTimestamp 
 } from 'firebase/firestore'; 
 import { 
     Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Trophy, 
-    X, Send, Download, Copy, Instagram 
+    X, Send, Download, Copy, Instagram, Plane 
 } from 'lucide-react'; 
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -20,12 +20,12 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
   const [savedPosts, setSavedPosts] = useState([]); 
 
   // Modals State
-  const [activeModal, setActiveModal] = useState(null); // 'likes', 'comments', 'share'
+  const [activeModal, setActiveModal] = useState(null); 
   const [selectedPost, setSelectedPost] = useState(null);
   
   // Data for Modals
-  const [modalUsers, setModalUsers] = useState([]); // For Likes List
-  const [postComments, setPostComments] = useState([]); // For Comments List
+  const [modalUsers, setModalUsers] = useState([]); 
+  const [postComments, setPostComments] = useState([]); 
   const [newComment, setNewComment] = useState("");
 
   // 1. FETCH CURRENT USER DATA
@@ -70,7 +70,6 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
                 likedBy: arrayUnion(currentUser),
                 likes: (post.likes || 0) + 1
             });
-            // Optional: Send Notification
             if (post.author !== currentUser) {
                 await addDoc(collection(db, "notifications"), {
                     type: "like",
@@ -98,23 +97,39 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
       } catch(err) { console.error("Save failed:", err); }
   };
 
+  // ⚡ SMART DOWNLOAD / COPY LOGIC
+  const handleDownloadOrCopy = async (post) => {
+      if (post.image) {
+          try {
+              const response = await fetch(post.image);
+              const blob = await response.blob();
+              const url = window.URL.createObjectURL(blob);
+              
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = `shayari_${post.id}.jpg`;
+              document.body.appendChild(link);
+              link.click();
+              
+              document.body.removeChild(link);
+              window.URL.revokeObjectURL(url);
+          } catch (error) {
+              console.error("Download failed:", error);
+              window.open(post.image, '_blank');
+          }
+      } else {
+          navigator.clipboard.writeText(post.content);
+          alert("Shayari copied to clipboard!");
+      }
+  };
+
   // --- MODAL OPENERS ---
 
   const openLikesModal = async (post) => {
       setSelectedPost(post);
       setActiveModal('likes');
-      setModalUsers([]); // Reset
-      
-      // Fetch user details for everyone who liked
+      setModalUsers([]); 
       if (post.likedBy && post.likedBy.length > 0) {
-          const promises = post.likedBy.map(async (username) => {
-              // Try to find user doc
-              const q = query(collection(db, "users"), orderBy("username"), limit(1)); 
-              // Simplification: In real app, query by username field
-              // For now, we just display the usernames from the array
-              return { username }; 
-          });
-          // In a real app, you'd fetch profile pics here
           setModalUsers(post.likedBy.map(u => ({ username: u }))); 
       }
   };
@@ -122,12 +137,10 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
   const openCommentsModal = (post) => {
       setSelectedPost(post);
       setActiveModal('comments');
-      // Subscribe to comments subcollection
       const q = query(collection(db, "shayaris", post.id, "comments"), orderBy("timestamp", "asc"));
-      const unsub = onSnapshot(q, (snap) => {
+      onSnapshot(q, (snap) => {
           setPostComments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
-      // Store unsub function to cleanup if needed (React handles simple unmounts)
   };
 
   const openShareModal = (post) => {
@@ -143,18 +156,15 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
       setNewComment("");
 
       try {
-          // 1. Add comment to subcollection
           await addDoc(collection(db, "shayaris", selectedPost.id, "comments"), {
               username: currentUser,
               text: text,
               timestamp: serverTimestamp()
           });
 
-          // 2. Update comment count on post
           const postRef = doc(db, "shayaris", selectedPost.id);
           await updateDoc(postRef, { commentCount: (selectedPost.commentCount || 0) + 1 });
 
-          // 3. Send Notification
           if(selectedPost.author !== currentUser) {
               await addDoc(collection(db, "notifications"), {
                   type: "comment",
@@ -173,35 +183,22 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
       if(!selectedPost) return;
       
       const shareText = encodeURIComponent(`Check out this shayari by @${selectedPost.author}:\n\n"${selectedPost.content}"\n\nSent from ShayariGram`);
-      const url = window.location.href; // Or specific post link
+      const url = window.location.href; 
 
-      // 1. Increment Share Count in DB
       const postRef = doc(db, "shayaris", selectedPost.id);
       await updateDoc(postRef, { shares: (selectedPost.shares || 0) + 1 });
 
-      // 2. Perform Action
       if (platform === 'whatsapp') {
           window.open(`https://wa.me/?text=${shareText} ${url}`, '_blank');
+      } else if (platform === 'telegram') {
+          window.open(`https://t.me/share/url?url=${url}&text=${shareText}`, '_blank');
       } else if (platform === 'instagram') {
-          // Insta doesn't allow direct web sharing, usually just copy link
           navigator.clipboard.writeText(`${selectedPost.content} - @${selectedPost.author}`);
           alert("Text copied! Open Instagram to paste.");
           window.open('https://instagram.com', '_blank');
       } else if (platform === 'copy') {
           navigator.clipboard.writeText(`${selectedPost.content}\n\n- @${selectedPost.author}`);
           alert("Copied to clipboard!");
-      } else if (platform === 'save_device') {
-          // Download Image Logic
-          if(selectedPost.image) {
-              const link = document.createElement('a');
-              link.href = selectedPost.image;
-              link.download = `shayari_${selectedPost.id}.jpg`;
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
-          } else {
-              alert("No image to save (Text only)");
-          }
       }
       
       setActiveModal(null);
@@ -212,15 +209,12 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
       setSelectedPost(null);
   };
 
-  // Identify Top Post
   const topPostId = posts.length > 0 ? [...posts].sort((a, b) => (b.likes || 0) - (a.likes || 0))[0].id : null;
 
   if (loading) return <div className="text-center py-10 text-gray-400">Loading Feed...</div>;
 
   return (
     <div className="space-y-8 pb-20">
-      
-      {/* --- POSTS FEED --- */}
       {posts.map((post) => {
         const isTopPick = post.id === topPostId && post.likes > 0;
         const displayUser = post.author || "Unknown";
@@ -260,6 +254,14 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
                         <button className="flex items-center gap-2 group" onClick={() => handleLike(post)}><Heart size={24} className={`transition-transform group-hover:scale-110 ${isLikedByMe ? 'fill-red-500 text-red-500' : 'text-gray-600'}`} /></button>
                         <button className="flex items-center gap-2 group" onClick={() => openCommentsModal(post)}><MessageCircle size={24} className="text-gray-600 group-hover:text-blue-500 transition" /></button>
                         <button className="flex items-center gap-2 group" onClick={() => openShareModal(post)}><Share2 size={24} className="text-gray-600 group-hover:text-green-500 transition" /></button>
+                        
+                        <button className="flex items-center gap-2 group" onClick={() => handleDownloadOrCopy(post)}>
+                            {post.image ? (
+                                <Download size={24} className="text-gray-600 group-hover:text-purple-500 transition" />
+                            ) : (
+                                <Copy size={24} className="text-gray-600 group-hover:text-purple-500 transition" />
+                            )}
+                        </button>
                     </div>
                     <button onClick={() => handleSave(post.id)}><Bookmark size={24} className={`${isSavedByMe ? 'fill-black text-black' : 'text-gray-600 hover:text-gray-900'}`} /></button>
                 </div>
@@ -273,13 +275,11 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
         );
       })}
 
-      {/* --- ALL MODALS --- */}
       <AnimatePresence>
         {activeModal && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end md:items-center justify-center p-0 md:p-4" onClick={closeModal}>
                 <motion.div initial={{ y: 100 }} animate={{ y: 0 }} exit={{ y: 100 }} onClick={e => e.stopPropagation()} className="bg-white w-full md:max-w-sm rounded-t-2xl md:rounded-2xl overflow-hidden shadow-2xl max-h-[80vh] flex flex-col">
                     
-                    {/* MODAL HEADER */}
                     <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                         <h3 className="font-bold text-center flex-1">
                             {activeModal === 'likes' && 'Likes'}
@@ -289,7 +289,6 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
                         <button onClick={closeModal}><X size={20}/></button>
                     </div>
 
-                    {/* 1. LIKES LIST */}
                     {activeModal === 'likes' && (
                         <div className="flex-1 overflow-y-auto p-2">
                             {modalUsers.map((u, i) => (
@@ -301,7 +300,6 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
                         </div>
                     )}
 
-                    {/* 2. COMMENTS LIST */}
                     {activeModal === 'comments' && (
                         <>
                             <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -318,24 +316,17 @@ const ShayariFeed = ({ onProfileClick, onPostClick }) => {
                                 )}
                             </div>
                             <div className="p-3 border-t border-gray-100 flex gap-2 items-center bg-white">
-                                <input 
-                                    value={newComment} 
-                                    onChange={e => setNewComment(e.target.value)} 
-                                    placeholder="Add a comment..." 
-                                    className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                    onKeyDown={e => e.key === 'Enter' && postComment()}
-                                />
+                                <input value={newComment} onChange={e => setNewComment(e.target.value)} placeholder="Add a comment..." className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" onKeyDown={e => e.key === 'Enter' && postComment()} />
                                 <button onClick={postComment} disabled={!newComment.trim()} className="text-blue-500 font-bold text-sm disabled:opacity-50">Post</button>
                             </div>
                         </>
                     )}
 
-                    {/* 3. SHARE OPTIONS */}
                     {activeModal === 'share' && (
                         <div className="p-4 grid grid-cols-4 gap-4">
                             <ShareOption icon={MessageCircle} color="bg-green-500" label="WhatsApp" onClick={() => handleShareAction('whatsapp')} />
+                            <ShareOption icon={Plane} color="bg-blue-400" label="Telegram" onClick={() => handleShareAction('telegram')} />
                             <ShareOption icon={Instagram} color="bg-pink-500" label="Instagram" onClick={() => handleShareAction('instagram')} />
-                            <ShareOption icon={Download} color="bg-gray-700" label="Save" onClick={() => handleShareAction('save_device')} />
                             <ShareOption icon={Copy} color="bg-blue-500" label="Copy Link" onClick={() => handleShareAction('copy')} />
                         </div>
                     )}

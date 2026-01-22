@@ -1,72 +1,99 @@
 import React, { useEffect, useRef, useState } from 'react';
-import SimplePeer from 'simple-peer';
+import SimplePeer from 'simple-peer'; // Ensure you have: npm install simple-peer
 import { db } from '../firebase';
-import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
-import { Mic, MicOff, Video, VideoOff, PhoneOff } from 'lucide-react';
+import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
+import { Mic, MicOff, Video, VideoOff, PhoneOff, User } from 'lucide-react';
 import { motion } from 'framer-motion';
 
-const VideoCall = ({ callId, currentUser, isCaller, onEndCall }) => {
+const VideoCall = ({ callId, currentUser, isCaller, callType, onEndCall }) => {
   const [stream, setStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
-  const [callStatus, setCallStatus] = useState('connecting'); // connecting, connected, ended
+  const [isVideoOff, setIsVideoOff] = useState(callType === 'audio'); // Default off for audio calls
+  const [callStatus, setCallStatus] = useState('connecting'); 
+  const [otherUserName, setOtherUserName] = useState("User");
+  const [seconds, setSeconds] = useState(0);
   
   const myVideo = useRef();
   const userVideo = useRef();
   const connectionRef = useRef();
 
+  // --- 1. CALL TIMER ---
   useEffect(() => {
-    // 1. Get User Media (Camera & Mic)
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+    let interval = null;
+    if (callStatus === 'connected') {
+        interval = setInterval(() => {
+            setSeconds(prev => prev + 1);
+        }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [callStatus]);
+
+  // Format Time (MM:SS)
+  const formatTime = (totalSeconds) => {
+      const mins = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+      const secs = (totalSeconds % 60).toString().padStart(2, '0');
+      return `${mins}:${secs}`;
+  };
+
+  // --- 2. INITIALIZE CALL ---
+  useEffect(() => {
+    // Determine constraints based on call type
+    const constraints = {
+        video: callType === 'video', // Only ask for video if it's a video call
+        audio: true
+    };
+
+    navigator.mediaDevices.getUserMedia(constraints)
       .then((currentStream) => {
         setStream(currentStream);
-        if (myVideo.current) myVideo.current.srcObject = currentStream;
+        if (myVideo.current && callType === 'video') {
+            myVideo.current.srcObject = currentStream;
+        }
 
-        // 2. Initialize Peer
         const peer = new SimplePeer({
           initiator: isCaller,
           trickle: false,
           stream: currentStream,
         });
 
-        // 3. LISTEN: When we get a signal (handshake data), save it to Firebase
+        // Send Signal
         peer.on('signal', (data) => {
           if (isCaller) {
-             // Caller saves 'offer'
              updateDoc(doc(db, "calls", callId), { offer: JSON.stringify(data) });
           } else {
-             // Receiver saves 'answer'
              updateDoc(doc(db, "calls", callId), { answer: JSON.stringify(data) });
           }
         });
 
-        // 4. LISTEN: When we get the other user's stream
+        // Receive Stream
         peer.on('stream', (currentRemoteStream) => {
           if (userVideo.current) {
             userVideo.current.srcObject = currentRemoteStream;
           }
         });
 
-        // 5. LISTEN: Firebase updates for the Handshake
-        const unsub = onSnapshot(doc(db, "calls", callId), (snapshot) => {
+        // Firebase Listener
+        const unsub = onSnapshot(doc(db, "calls", callId), async (snapshot) => {
             const data = snapshot.data();
             
-            // If call ended by other person
+            // Fetch Other User Name for UI
+            if (data) {
+                const otherUser = isCaller ? data.receiver : data.caller;
+                setOtherUserName(otherUser);
+            }
+
             if (data?.status === 'ended') {
                 leaveCall();
             }
 
-            // Connection Logic
             if (isCaller && data?.answer && !connectionRef.current.connected) {
-                // As Caller: Wait for 'answer', then connect
                 peer.signal(JSON.parse(data.answer));
-                connectionRef.current.connected = true; // prevent loop
+                connectionRef.current.connected = true;
                 setCallStatus('connected');
             } 
             else if (!isCaller && data?.offer && !connectionRef.current.connected) {
-                // As Receiver: Wait for 'offer', then connect
                 peer.signal(JSON.parse(data.offer));
-                connectionRef.current.connected = true; // prevent loop
+                connectionRef.current.connected = true;
                 setCallStatus('connected');
             }
         });
@@ -74,71 +101,99 @@ const VideoCall = ({ callId, currentUser, isCaller, onEndCall }) => {
         connectionRef.current = peer;
         return () => unsub();
       })
-      .catch(err => console.error("Failed to get stream:", err));
+      .catch(err => {
+          console.error("Media Error:", err);
+          alert("Could not access camera/microphone. Please allow permissions.");
+          onEndCall();
+      });
 
     return () => leaveCall();
-  }, []); // Run once on mount
+  }, []);
 
   const leaveCall = () => {
     setCallStatus('ended');
     if (connectionRef.current) connectionRef.current.destroy();
-    if (stream) stream.getTracks().forEach(track => track.stop()); // Stop camera light
-    
-    // Update Firebase to let other know
+    if (stream) stream.getTracks().forEach(track => track.stop());
     updateDoc(doc(db, "calls", callId), { status: 'ended' });
     onEndCall();
   };
 
   const toggleMute = () => {
     if(stream) {
-        stream.getAudioTracks()[0].enabled = !stream.getAudioTracks()[0].enabled;
-        setIsMuted(!stream.getAudioTracks()[0].enabled);
+        const audioTrack = stream.getAudioTracks()[0];
+        if(audioTrack) {
+            audioTrack.enabled = !audioTrack.enabled;
+            setIsMuted(!audioTrack.enabled);
+        }
     }
   }
 
   const toggleVideo = () => {
+      // Only allow toggling video if it was a video call initially
+      if(callType === 'audio') return; 
+
       if(stream) {
-          stream.getVideoTracks()[0].enabled = !stream.getVideoTracks()[0].enabled;
-          setIsVideoOff(!stream.getVideoTracks()[0].enabled);
+          const videoTrack = stream.getVideoTracks()[0];
+          if(videoTrack) {
+              videoTrack.enabled = !videoTrack.enabled;
+              setIsVideoOff(!videoTrack.enabled);
+          }
       }
   }
 
   return (
-    <div className="fixed inset-0 z-[100] bg-gray-900 flex flex-col items-center justify-center">
-        {/* Remote Video (Full Screen) */}
-        {callStatus === 'connected' ? (
+    <div className="fixed inset-0 z-[100] bg-gray-900 flex flex-col items-center justify-center overflow-hidden">
+        
+        {/* --- REMOTE VIDEO / AVATAR AREA --- */}
+        {callType === 'video' && callStatus === 'connected' ? (
              <video playsInline ref={userVideo} autoPlay className="absolute inset-0 w-full h-full object-cover" />
         ) : (
-            <div className="flex flex-col items-center animate-pulse z-10">
-                <div className="w-24 h-24 bg-gray-700 rounded-full mb-4"></div>
-                <p className="text-white text-xl">Connecting...</p>
+            // Audio Call UI
+            <div className="flex flex-col items-center z-10 animate-pulse">
+                <div className="w-32 h-32 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center shadow-2xl mb-6">
+                    <span className="text-5xl font-bold text-white">{otherUserName[0]?.toUpperCase()}</span>
+                </div>
+                <h2 className="text-3xl font-bold text-white mb-2">{otherUserName}</h2>
+                <p className="text-gray-300 text-lg">
+                    {callStatus === 'connected' ? formatTime(seconds) : "Connecting..."}
+                </p>
             </div>
         )}
 
-        {/* My Video (Small Overlay) */}
-        {stream && (
+        {/* --- LOCAL VIDEO (Video Call Only) --- */}
+        {callType === 'video' && stream && (
             <motion.div 
                 drag 
                 dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
                 className="absolute top-4 right-4 w-32 h-48 bg-black rounded-xl overflow-hidden shadow-2xl border-2 border-white/20 z-20"
             >
-                <video playsInline muted ref={myVideo} autoPlay className="w-full h-full object-cover" />
+                <video playsInline muted ref={myVideo} autoPlay className={`w-full h-full object-cover ${isVideoOff ? 'hidden' : 'block'}`} />
+                {isVideoOff && (
+                    <div className="w-full h-full flex items-center justify-center bg-gray-800 text-white">
+                        <VideoOff />
+                    </div>
+                )}
             </motion.div>
         )}
 
-        {/* Controls */}
+        {/* --- CONTROLS --- */}
         <div className="absolute bottom-10 flex gap-6 z-30">
-            <button onClick={toggleMute} className={`p-4 rounded-full ${isMuted ? 'bg-red-500' : 'bg-white/20 backdrop-blur-md'} text-white transition hover:scale-110`}>
+            {/* Mute */}
+            <button onClick={toggleMute} className={`p-4 rounded-full ${isMuted ? 'bg-white text-gray-900' : 'bg-white/20 backdrop-blur-md text-white'} transition hover:scale-110`}>
                 {isMuted ? <MicOff /> : <Mic />}
             </button>
 
+            {/* End Call */}
             <button onClick={leaveCall} className="p-4 rounded-full bg-red-600 text-white shadow-lg transition hover:scale-110">
                 <PhoneOff size={32} fill="currentColor" />
             </button>
 
-            <button onClick={toggleVideo} className={`p-4 rounded-full ${isVideoOff ? 'bg-red-500' : 'bg-white/20 backdrop-blur-md'} text-white transition hover:scale-110`}>
-                {isVideoOff ? <VideoOff /> : <Video />}
-            </button>
+            {/* Video Toggle (Only for Video Calls) */}
+            {callType === 'video' && (
+                <button onClick={toggleVideo} className={`p-4 rounded-full ${isVideoOff ? 'bg-white text-gray-900' : 'bg-white/20 backdrop-blur-md text-white'} transition hover:scale-110`}>
+                    {isVideoOff ? <VideoOff /> : <Video />}
+                </button>
+            )}
         </div>
     </div>
   );
