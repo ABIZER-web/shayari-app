@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, doc, getDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove, setDoc, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Grid, Bookmark, ArrowLeft, MapPin, X } from 'lucide-react'; 
+import { Grid, Bookmark, MapPin, X } from 'lucide-react'; 
 import { motion, AnimatePresence } from 'framer-motion';
 import SettingsModal from './SettingsModal'; 
 import EditProfileModal from './EditProfileModal'; 
@@ -9,7 +9,7 @@ import EditProfileModal from './EditProfileModal';
 const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigateToChat, onProfileClick }) => {
   const [activeTab, setActiveTab] = useState("posts");
   const [userPosts, setUserPosts] = useState([]);
-  const [savedPosts, setSavedPosts] = useState([]); // Stores the actual post data
+  const [savedPosts, setSavedPosts] = useState([]); 
   
   // Profile Data
   const [userData, setUserData] = useState({ bio: "", location: "", photoURL: null, followers: [], following: [], username: "", saved: [] });
@@ -49,11 +49,9 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
             if (data.following && data.following.includes(currentUser)) setIsFollowedBy(true);
             else setIsFollowedBy(false);
 
-            // ⚡ FIXED: FETCH SAVED POSTS FROM FIREBASE
-            // Only fetch if looking at own profile and there are saved IDs
+            // FETCH SAVED POSTS
             if (isOwnProfile && data.saved && data.saved.length > 0) {
                 try {
-                    // Fetch all saved posts in parallel
                     const promises = data.saved.map(id => getDoc(doc(db, "shayaris", id)));
                     const docs = await Promise.all(promises);
                     const fetchedSaved = docs
@@ -190,11 +188,6 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
         )}
       </AnimatePresence>
 
-      {/* HEADER (Mobile Only) */}
-      <div className="md:hidden sticky top-0 z-20 bg-white/90 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between transition-all">
-        <div className="flex items-center gap-4"><button onClick={onBack} className="p-2 rounded-full hover:bg-gray-100 transition"><ArrowLeft size={22} /></button><h2 className="text-lg font-bold tracking-wide">@{userData.username || profileUser}</h2></div>
-      </div>
-
       <div className="w-full max-w-4xl mx-auto px-4 md:px-10 pt-6 pb-20">
         <div className="flex flex-col md:flex-row items-center md:items-start gap-8 mb-10">
           
@@ -237,13 +230,11 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
           </div>
         </div>
 
-        {/* TABS */}
         <div className="flex border-t border-gray-200 justify-center gap-12 mb-4">
             <TabButton icon={Grid} label="POSTS" active={activeTab === 'posts'} onClick={() => setActiveTab("posts")} />
             {isOwnProfile && <TabButton icon={Bookmark} label="SAVED" active={activeTab === 'saved'} onClick={() => setActiveTab("saved")} />}
         </div>
 
-        {/* CONTENT GRID */}
         <div className="min-h-[300px]">
             {loading ? <div className="text-center py-20 text-gray-400">Loading...</div> : (
                 <div className="grid grid-cols-3 gap-0.5 md:gap-6">

@@ -7,11 +7,11 @@ import {
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { 
     ArrowLeft, Edit, MessageCircle, X, Phone, Video, Camera, Info, 
-    Image as ImageIcon, Mic, MoreVertical, Trash2, Copy, Forward, StopCircle, Download 
+    Image as ImageIcon, Mic, MoreVertical, Trash2, Copy, Forward, StopCircle, Download, Reply 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
+const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart, onChatSelect }) => {
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(initialChatId || null);
   const [messages, setMessages] = useState([]);
@@ -36,13 +36,35 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
   const audioChunksRef = useRef([]);
 
   // Message Actions State
-  const [selectedMessageId, setSelectedMessageId] = useState(null);
-  const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
+  const [selectedMessage, setSelectedMessage] = useState(null); 
+  const [replyingTo, setReplyingTo] = useState(null);
 
   const currentChat = chats.find(c => c.id === activeChatId);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
+
+  // --- DATE & TIME HELPERS ---
+  const getDayLabel = (date) => {
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+
+      if (date.toDateString() === today.toDateString()) return "Today";
+      if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+      
+      const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      if (today.getTime() - date.getTime() < 7 * 24 * 60 * 60 * 1000) {
+          return days[date.getDay()];
+      }
+      return date.toLocaleDateString(); 
+  };
+
+  const formatTime = (timestamp) => {
+      if (!timestamp) return "";
+      const date = timestamp.toDate();
+      return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+  };
 
   // 1. FETCH CHAT LIST
   useEffect(() => {
@@ -120,9 +142,14 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
   useEffect(() => {
     if (!activeChatId) return;
     const q = query(collection(db, "chats", activeChatId, "messages"), orderBy("timestamp", "asc"));
+    
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      
+      const wasMessageAdded = snapshot.docChanges().some(change => change.type === 'added');
+      if (wasMessageAdded) {
+          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      }
     });
     return () => unsubscribe();
   }, [activeChatId]);
@@ -132,9 +159,11 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
     if (!isSearchOpen) return;
     const searchUsers = async () => {
         try {
-            let q = searchQuery.trim() === "" 
-                ? query(collection(db, "users"), limit(10)) 
-                : query(collection(db, "users"), where("username", ">=", searchQuery), where("username", "<=", searchQuery + '\uf8ff'), limit(10));
+            if (searchQuery.trim() === "") {
+                setSearchResults([]); // Empty search clears specific results
+                return;
+            }
+            let q = query(collection(db, "users"), where("username", ">=", searchQuery), where("username", "<=", searchQuery + '\uf8ff'), limit(10));
 
             const snapshot = await getDocs(q);
             const users = snapshot.docs.map(doc => doc.data().username).filter(u => u && u !== currentUser); 
@@ -147,77 +176,60 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
 
   // --- HANDLERS ---
 
-  const handleDeleteChat = async (e, chatId) => {
-      e.stopPropagation(); 
-      if(window.confirm("Are you sure you want to delete this chat? This cannot be undone.")) {
-          try {
-              await deleteDoc(doc(db, "chats", chatId));
-              if(activeChatId === chatId) setActiveChatId(null);
-          } catch(err) { console.error("Error deleting chat:", err); }
-      }
+  const handleMessageClick = (e, msg) => {
+      if(e.target.closest('button')) return; // Ignore button clicks
+      setSelectedMessage(msg); 
   };
 
-  const handleMessageLongPress = (e, msgId) => {
-      e.preventDefault();
-      setSelectedMessageId(msgId);
-      const x = e.clientX > window.innerWidth - 150 ? e.clientX - 150 : e.clientX;
-      const y = e.clientY > window.innerHeight - 150 ? e.clientY - 150 : e.clientY;
-      setContextMenuPos({ x, y });
+  const handleRightClick = (e, msg) => {
+      e.preventDefault(); 
+      setSelectedMessage(msg); 
   };
 
   const handleDeleteMessage = async () => {
-      if(!selectedMessageId || !activeChatId) return;
-      if(window.confirm("Delete this message?")) {
-          try {
-              await deleteDoc(doc(db, "chats", activeChatId, "messages", selectedMessageId));
-              setSelectedMessageId(null);
-          } catch(err) { console.error("Error deleting message:", err); }
-      }
+      if(!selectedMessage || !activeChatId) return;
+      try {
+          await deleteDoc(doc(db, "chats", activeChatId, "messages", selectedMessage.id));
+          setSelectedMessage(null);
+      } catch(err) { console.error("Error deleting message:", err); }
   };
 
   const handleCopyText = () => {
-      const msg = messages.find(m => m.id === selectedMessageId);
-      if(msg && msg.text) {
-          navigator.clipboard.writeText(msg.text);
-          alert("Text copied!");
+      if(selectedMessage && selectedMessage.text) {
+          navigator.clipboard.writeText(selectedMessage.text);
       }
-      setSelectedMessageId(null);
+      setSelectedMessage(null);
   };
 
-  // ⚡ NEW: DOWNLOAD IMAGE FUNCTION
+  const handleReply = () => {
+      setReplyingTo(selectedMessage);
+      setSelectedMessage(null);
+  };
+
   const handleDownloadImage = async () => {
-      const msg = messages.find(m => m.id === selectedMessageId);
-      if(msg && msg.image) {
+      if(selectedMessage && selectedMessage.image) {
           try {
-              // Fetch the image as a blob to force download
-              const response = await fetch(msg.image);
+              const response = await fetch(selectedMessage.image);
               const blob = await response.blob();
               const url = window.URL.createObjectURL(blob);
-              
               const link = document.createElement('a');
               link.href = url;
               link.download = `chat_image_${Date.now()}.jpg`;
               document.body.appendChild(link);
               link.click();
-              
               window.URL.revokeObjectURL(url);
               document.body.removeChild(link);
-          } catch (error) {
-              console.error("Download failed:", error);
-              // Fallback: Open in new tab
-              window.open(msg.image, '_blank');
-          }
+          } catch (error) { window.open(selectedMessage.image, '_blank'); }
       }
-      setSelectedMessageId(null);
+      setSelectedMessage(null);
   };
 
   const handleForwardStart = () => {
-      const msg = messages.find(m => m.id === selectedMessageId);
-      if(msg) {
-          setMessageToForward(msg);
+      if(selectedMessage) {
+          setMessageToForward(selectedMessage);
           setIsForwardMode(true);
           setIsSearchOpen(true); 
-          setSelectedMessageId(null);
+          setSelectedMessage(null);
       }
   };
 
@@ -261,11 +273,9 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
           setIsForwardMode(false);
           setMessageToForward(null);
           setActiveChatId(chatId); 
+          if(onChatSelect) onChatSelect(chatId);
 
-      } catch(err) { 
-          console.error("Forward error:", err);
-          alert("Failed to forward message."); 
-      }
+      } catch(err) { console.error(err); }
   };
 
   const handleInputChange = async (e) => {
@@ -284,6 +294,8 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
     if (!newMessage.trim() || !activeChatId) return;
     const text = newMessage;
     setNewMessage(""); 
+    setReplyingTo(null);
+
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     const chatRef = doc(db, "chats", activeChatId);
     try {
@@ -292,27 +304,18 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
             text: text,
             sender: currentUser,
             timestamp: serverTimestamp(),
-            type: 'text'
+            type: 'text',
+            replyTo: replyingTo ? { text: replyingTo.text, sender: replyingTo.sender } : null
         });
-        const chatSnap = await getDoc(chatRef);
-        if (!chatSnap.exists()) {
-             await setDoc(chatRef, {
-                participants: activeChatId.split('_'),
-                lastMessage: text,
-                lastMessageSender: currentUser,
-                isRead: false,
-                timestamp: serverTimestamp(),
-                typing: { [currentUser]: false }
-            });
-        } else {
-             await setDoc(chatRef, {
-                lastMessage: text,
-                lastMessageSender: currentUser,
-                isRead: false,
-                timestamp: serverTimestamp(),
-                participants: chatSnap.data().participants 
-            }, { merge: true });
-        }
+        
+        await setDoc(chatRef, {
+            lastMessage: text,
+            lastMessageSender: currentUser,
+            isRead: false,
+            timestamp: serverTimestamp(),
+            participants: (await getDoc(chatRef)).data().participants || activeChatId.split('_')
+        }, { merge: true });
+
     } catch (err) { console.error("Error sending message:", err); }
   };
 
@@ -336,10 +339,9 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
               isRead: false,
               timestamp: serverTimestamp()
           }, { merge: true });
-      } catch (err) { console.error("Error uploading image:", err); }
+      } catch (err) { console.error(err); }
   };
 
-  // --- AUDIO RECORDING HANDLERS ---
   const toggleRecording = async () => {
       if (isRecording) {
           mediaRecorderRef.current.stop();
@@ -349,25 +351,17 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
               const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
               mediaRecorderRef.current = new MediaRecorder(stream);
               audioChunksRef.current = [];
-
               mediaRecorderRef.current.ondataavailable = (event) => {
-                  if (event.data.size > 0) {
-                      audioChunksRef.current.push(event.data);
-                  }
+                  if (event.data.size > 0) audioChunksRef.current.push(event.data);
               };
-
               mediaRecorderRef.current.onstop = async () => {
                   const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                   await uploadAudio(audioBlob);
                   stream.getTracks().forEach(track => track.stop());
               };
-
               mediaRecorderRef.current.start();
               setIsRecording(true);
-          } catch (err) {
-              console.error("Error accessing microphone:", err);
-              alert("Microphone access denied or not available.");
-          }
+          } catch (err) { alert("Microphone error."); }
       }
   };
 
@@ -378,7 +372,6 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
           const storageRef = ref(storage, `chat_audio/${activeChatId}/${fileName}`);
           const snapshot = await uploadBytes(storageRef, audioBlob);
           const downloadURL = await getDownloadURL(snapshot.ref);
-
           const chatRef = doc(db, "chats", activeChatId);
           await addDoc(collection(chatRef, "messages"), {
               audio: downloadURL,
@@ -386,15 +379,13 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
               timestamp: serverTimestamp(),
               type: 'audio'
           });
-
           await setDoc(chatRef, {
               lastMessage: "🎤 Voice Message",
               lastMessageSender: currentUser,
               isRead: false,
               timestamp: serverTimestamp()
           }, { merge: true });
-
-      } catch (err) { console.error("Error uploading audio:", err); }
+      } catch (err) { console.error(err); }
   };
 
   const startCall = async (type) => {
@@ -409,15 +400,11 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
   };
 
   const handleStartChat = async (targetUser) => {
-      if(isForwardMode) {
-          handleForwardSend(targetUser);
-          return;
-      }
+      if(isForwardMode) { handleForwardSend(targetUser); return; }
       setIsSearchOpen(false);
       const chatId = [currentUser, targetUser].sort().join("_");
       const chatRef = doc(db, "chats", chatId);
-      const chatSnap = await getDoc(chatRef);
-      if (!chatSnap.exists()) {
+      if (!(await getDoc(chatRef)).exists()) {
         await setDoc(chatRef, {
             participants: [currentUser, targetUser].sort(),
             lastMessage: "",
@@ -428,20 +415,23 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
         });
       }
       setActiveChatId(chatId);
+      if(onChatSelect) onChatSelect(chatId);
   };
 
   const triggerFileInput = () => {
       fileInputRef.current.click();
   };
 
+  // Helper to determine list to show
+  const displayList = searchQuery ? searchResults : chats.map(c => c.otherUser).filter(u => u !== "Unknown");
+
   return (
-    <div className="flex flex-col md:flex-row h-[100dvh] md:h-[85vh] bg-white md:rounded-2xl md:shadow-xl md:border border-gray-100 overflow-hidden max-w-6xl mx-auto md:mt-0 relative" onClick={() => setSelectedMessageId(null)}>
+    <div className="flex flex-col md:flex-row h-[100dvh] md:h-[85vh] bg-white md:rounded-2xl md:shadow-xl md:border border-gray-100 overflow-hidden max-w-6xl mx-auto md:mt-0 relative" onClick={() => setSelectedMessage(null)}>
       
       {/* --- LEFT SIDE: CHAT LIST --- */}
       <div className={`w-full md:w-1/3 bg-white flex-col h-full border-r border-gray-100 ${activeChatId ? 'hidden md:flex' : 'flex'}`}>
         <div className="px-4 h-16 flex justify-between items-center bg-white border-b border-gray-100 shrink-0 sticky top-0 z-10">
             <div className="flex items-center gap-3">
-                <button onClick={onBack} className="md:hidden p-2 -ml-2 rounded-full hover:bg-gray-50 text-gray-900 transition"><ArrowLeft size={24} /></button>
                 <h2 className="text-xl font-bold font-serif text-gray-900">Messages</h2>
             </div>
             <button onClick={() => { setIsForwardMode(false); setIsSearchOpen(true); }} className="p-2 rounded-full hover:bg-gray-50 text-gray-900"><Edit size={22} /></button>
@@ -455,24 +445,16 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
                 </div>
             ) : (
                 chats.map(chat => (
-                    <div 
-                        key={chat.id} 
-                        onClick={() => setActiveChatId(chat.id)}
-                        className={`p-4 flex items-center gap-4 cursor-pointer hover:bg-gray-50 transition border-b border-gray-50 group relative ${activeChatId === chat.id ? 'bg-gray-50' : ''}`}
-                    >
-                        <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-gray-200 to-gray-300 flex items-center justify-center text-gray-700 font-bold text-xl shrink-0">
-                            {chat.otherUser ? chat.otherUser[0].toUpperCase() : "?"}
-                        </div>
+                    <div key={chat.id} onClick={() => { setActiveChatId(chat.id); if(onChatSelect) onChatSelect(chat.id); }} className={`p-4 flex items-center gap-4 cursor-pointer hover:bg-gray-50 transition border-b border-gray-50 group relative ${activeChatId === chat.id ? 'bg-gray-50' : ''}`}>
+                        <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-gray-200 to-gray-300 flex items-center justify-center text-gray-700 font-bold text-xl shrink-0">{chat.otherUser ? chat.otherUser[0].toUpperCase() : "?"}</div>
                         <div className="flex-1 min-w-0">
                             <div className="flex justify-between items-center mb-0.5">
                                 <h4 className={`text-base ${chat.isUnread ? 'font-bold text-black' : 'font-normal text-gray-900'}`}>{chat.otherUser || "Unknown"}</h4>
                                 {chat.isUnread && <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-pulse shadow-sm"></div>}
                             </div>
-                            <p className={`text-sm truncate ${chat.isUnread ? 'font-bold text-black' : 'text-gray-500'}`}>
-                                {chat.lastMessageSender === currentUser ? `You: ${chat.lastMessage}` : chat.lastMessage || "Start a conversation"}
-                            </p>
+                            <p className={`text-sm truncate ${chat.isUnread ? 'font-bold text-black' : 'text-gray-500'}`}>{chat.lastMessageSender === currentUser ? `You: ${chat.lastMessage}` : chat.lastMessage || "Start conversation"}</p>
                         </div>
-                        <button onClick={(e) => handleDeleteChat(e, chat.id)} className="absolute right-4 opacity-0 group-hover:opacity-100 p-2 text-gray-400 hover:text-red-500 transition"><Trash2 size={18} /></button>
+                        <button onClick={(e) => {e.stopPropagation(); handleDeleteChat(e, chat.id);}} className="absolute right-4 opacity-0 group-hover:opacity-100 p-2 text-gray-400 hover:text-red-500 transition"><Trash2 size={18} /></button>
                     </div>
                 ))
             )}
@@ -483,21 +465,21 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
       <div className={`w-full md:w-2/3 flex flex-col bg-white h-full relative ${!activeChatId ? 'hidden md:flex' : 'flex'}`}>
         {activeChatId ? (
             <>
-                <div className="absolute top-0 left-0 right-0 z-50 h-16 bg-white/95 backdrop-blur-sm border-b border-gray-100 px-4 flex items-center gap-3 shadow-sm">
-                    <button onClick={() => setActiveChatId(null)} className="md:hidden p-2 -ml-2 text-gray-900 rounded-full hover:bg-gray-50 transition"><ArrowLeft size={24} /></button>
+                <div className="h-16 bg-white/95 backdrop-blur-sm border-b border-gray-100 px-4 flex items-center gap-3 shadow-sm shrink-0 z-10">
+                    <button onClick={() => { setActiveChatId(null); if(onChatSelect) onChatSelect(null); }} className="md:hidden p-2 -ml-2 text-gray-900 rounded-full hover:bg-gray-50 transition"><ArrowLeft size={24} /></button>
                     <div className="w-9 h-9 rounded-full bg-black text-white flex items-center justify-center font-bold text-xs">{activeChatUser ? activeChatUser[0].toUpperCase() : "?"}</div>
                     <div className="flex-1 min-w-0">
                         <h3 className="font-bold text-gray-900 text-sm leading-tight">{activeChatUser || "Unknown"}</h3>
                         <span className={`text-[10px] ${otherUserStatus === 'online' ? 'text-green-600 font-bold' : 'text-gray-500'}`}>{isOtherTyping ? "Typing..." : (otherUserStatus === 'online' ? "Active now" : "Offline")}</span>
                     </div>
                     <div className="flex gap-3 text-gray-900">
-                        <button onClick={() => startCall('audio')} className="hover:text-blue-500 transition"><Phone size={24} strokeWidth={1.5} /></button>
-                        <button onClick={() => startCall('video')} className="hover:text-blue-500 transition"><Video size={26} strokeWidth={1.5} /></button>
+                        <button onClick={() => startCall('audio')}><Phone size={24} strokeWidth={1.5} /></button>
+                        <button onClick={() => startCall('video')}><Video size={26} strokeWidth={1.5} /></button>
                         <Info size={24} strokeWidth={1.5} />
                     </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-4 bg-white scrollbar-hide pt-20 pb-32">
+                <div className="flex-1 overflow-y-auto px-4 bg-white scrollbar-hide py-4">
                     <div className="flex flex-col items-center justify-center py-8">
                         <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-3">
                              <div className="w-12 h-12 bg-black rounded-full flex items-center justify-center text-white font-bold text-2xl">{activeChatUser ? activeChatUser[0].toUpperCase() : "?"}</div>
@@ -506,84 +488,80 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
                         <p className="text-sm text-gray-500 mb-4">ShayariGram User</p>
                     </div>
 
-                    <div className="space-y-1">
-                        {messages.map((msg) => {
+                    <div className="space-y-4">
+                        {messages.map((msg, index) => {
                             const isMe = msg.sender === currentUser;
-                            return (
-                                <motion.div 
-                                    initial={{ opacity: 0, y: 5 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    key={msg.id} 
-                                    className={`flex ${isMe ? 'justify-end' : 'justify-start'} group relative`}
-                                    onContextMenu={(e) => handleMessageLongPress(e, msg.id)}
-                                >
-                                    {selectedMessageId === msg.id && (
-                                        <div 
-                                            className="absolute z-50 bg-white shadow-xl border border-gray-100 rounded-lg p-1 flex flex-col min-w-[120px]"
-                                            style={{ top: '100%', [isMe ? 'right' : 'left']: 0 }}
-                                        >
-                                            {/* TEXT OPTIONS */}
-                                            {msg.type === 'text' && <button onClick={handleCopyText} className="flex items-center gap-2 p-2 hover:bg-gray-50 text-sm text-gray-700 text-left rounded"><Copy size={14}/> Copy</button>}
-                                            
-                                            {/* IMAGE OPTIONS */}
-                                            {msg.type === 'image' && (
-                                                <button onClick={handleDownloadImage} className="flex items-center gap-2 p-2 hover:bg-gray-50 text-sm text-gray-700 text-left rounded">
-                                                    <Download size={14}/> Save Image
-                                                </button>
-                                            )}
+                            const prevMsg = messages[index - 1];
+                            
+                            let showDate = false;
+                            if (msg.timestamp) {
+                                const currentDate = getDayLabel(msg.timestamp.toDate());
+                                const prevDate = prevMsg?.timestamp ? getDayLabel(prevMsg.timestamp.toDate()) : null;
+                                if (currentDate !== prevDate) showDate = true;
+                            }
 
-                                            <button onClick={handleForwardStart} className="flex items-center gap-2 p-2 hover:bg-gray-50 text-sm text-gray-700 text-left rounded"><Forward size={14}/> Forward</button>
-                                            
-                                            {isMe && <button onClick={handleDeleteMessage} className="flex items-center gap-2 p-2 hover:bg-red-50 text-sm text-red-600 text-left rounded"><Trash2 size={14}/> Delete</button>}
+                            return (
+                                <div key={msg.id}>
+                                    {showDate && (
+                                        <div className="flex justify-center my-4">
+                                            <span className="text-[10px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-full uppercase tracking-wider">
+                                                {getDayLabel(msg.timestamp.toDate())}
+                                            </span>
                                         </div>
                                     )}
 
-                                    <div className={`max-w-[75%] px-4 py-2.5 text-[15px] leading-relaxed break-words shadow-sm cursor-pointer ${isMe ? 'bg-blue-600 text-white rounded-2xl rounded-br-sm' : 'bg-gray-100 text-gray-900 rounded-2xl rounded-bl-sm'}`}>
-                                        {msg.isForwarded && <p className="text-[10px] opacity-70 mb-1 flex items-center gap-1 italic"><Forward size={10}/> Forwarded</p>}
-                                        
-                                        {msg.type === 'image' ? (
-                                            <img src={msg.image} alt="Sent" className="rounded-lg max-w-full max-h-60 object-cover" />
-                                        ) : msg.type === 'audio' ? (
-                                            <div className="flex items-center gap-2 min-w-[200px]">
-                                                <audio controls src={msg.audio} className="h-8 w-full" />
+                                    <motion.div 
+                                        initial={{ opacity: 0, y: 5 }} 
+                                        animate={{ opacity: 1, y: 0 }} 
+                                        className={`flex ${isMe ? 'justify-end' : 'justify-start'} group relative mb-1`} 
+                                        onClick={(e) => handleMessageClick(e, msg)}
+                                        onContextMenu={(e) => handleRightClick(e, msg)}
+                                    >
+                                        <div className={`max-w-[75%] relative`}>
+                                            
+                                            {msg.replyTo && (
+                                                <div className={`text-[10px] mb-1 p-2 rounded-lg border-l-2 border-white/50 ${isMe ? 'bg-blue-700/30 text-blue-100' : 'bg-gray-200 text-gray-600'}`}>
+                                                    <p className="font-bold">{msg.replyTo.sender}</p>
+                                                    <p className="truncate opacity-80">{msg.replyTo.text}</p>
+                                                </div>
+                                            )}
+
+                                            <div className={`px-4 py-2.5 text-[15px] leading-relaxed shadow-sm cursor-pointer ${isMe ? 'bg-blue-600 text-white rounded-2xl rounded-br-sm' : 'bg-gray-100 text-gray-900 rounded-2xl rounded-bl-sm'}`}>
+                                                {msg.isForwarded && <p className="text-[10px] opacity-70 mb-1 flex items-center gap-1 italic"><Forward size={10}/> Forwarded</p>}
+                                                {msg.type === 'image' ? <img src={msg.image} alt="Sent" className="rounded-lg max-w-full max-h-60 object-cover" /> 
+                                                : msg.type === 'audio' ? <audio controls src={msg.audio} className="h-8 w-48" /> 
+                                                : msg.text}
                                             </div>
-                                        ) : (
-                                            msg.text
-                                        )}
-                                    </div>
-                                    <button onClick={(e) => handleMessageLongPress(e, msg.id)} className="md:hidden p-2 opacity-50"><MoreVertical size={14}/></button>
-                                </motion.div>
+                                            
+                                            <p className={`text-[9px] mt-1 ${isMe ? 'text-right text-gray-400' : 'text-left text-gray-400'}`}>
+                                                {msg.timestamp ? formatTime(msg.timestamp) : "Sending..."}
+                                            </p>
+                                        </div>
+                                    </motion.div>
+                                </div>
                             );
                         })}
-                        {currentChat && currentChat.lastMessageSender === currentUser && messages.length > 0 && (
-                            <div className="flex justify-end mt-1 mb-2 px-1"><span className="text-[10px] text-gray-400 font-medium">{currentChat.isRead ? "Seen" : "Sent"}</span></div>
-                        )}
-                        {isOtherTyping && (
-                            <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
-                                <div className="bg-gray-100 text-gray-500 px-4 py-2 rounded-2xl rounded-bl-sm text-xs italic flex items-center gap-1">
-                                    <span className="animate-bounce">●</span><span className="animate-bounce delay-100">●</span><span className="animate-bounce delay-200">●</span>
-                                </div>
-                            </motion.div>
-                        )}
                         <div ref={messagesEndRef} />
                     </div>
                 </div>
 
-                <div className="absolute bottom-[56px] md:bottom-0 left-0 right-0 bg-white p-3 border-t border-gray-100 z-40">
+                <div className="bg-white p-3 border-t border-gray-100 z-40 shrink-0">
+                    {replyingTo && (
+                        <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg mb-2 text-xs text-gray-500 border-l-4 border-blue-500">
+                            <div><p className="font-bold text-blue-600">Replying to {replyingTo.sender}</p><p className="truncate w-48">{replyingTo.text || "Media"}</p></div>
+                            <button onClick={() => setReplyingTo(null)}><X size={16}/></button>
+                        </div>
+                    )}
                     <form onSubmit={handleSendMessage} className="flex items-center gap-2 bg-gray-100 rounded-full px-2 py-2">
                         <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" hidden />
                         <div className="p-2 bg-blue-500 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition text-white" onClick={() => fileInputRef.current.click()}><Camera size={18} /></div>
                         <input value={newMessage} onChange={handleInputChange} placeholder="Message..." className="flex-1 bg-transparent text-gray-900 placeholder-gray-500 text-sm focus:outline-none px-2 h-8"/>
-                        
                         {newMessage.trim() ? (
                             <button type="submit" className="text-blue-600 font-bold text-sm px-3 hover:text-blue-700">Send</button>
                         ) : (
                             <div className="flex gap-3 px-3 text-gray-500 items-center">
-                                <ImageIcon size={22} className="cursor-pointer hover:text-gray-700" onClick={triggerFileInput} />
-                                
-                                <button type="button" onClick={toggleRecording} className={`transition-all ${isRecording ? 'text-red-500 scale-110 animate-pulse' : 'text-gray-500 hover:text-gray-700'}`}>
-                                    {isRecording ? <StopCircle size={22} fill="currentColor"/> : <Mic size={22} />}
-                                </button>
+                                <ImageIcon size={22} onClick={triggerFileInput} />
+                                <button type="button" onClick={toggleRecording} className={`transition-all ${isRecording ? 'text-red-500 scale-110 animate-pulse' : 'text-gray-500 hover:text-gray-700'}`}>{isRecording ? <StopCircle size={22} fill="currentColor"/> : <Mic size={22} />}</button>
                             </div>
                         )}
                     </form>
@@ -599,6 +577,22 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
         )}
       </div>
 
+      {/* --- MESSAGE OPTIONS POPUP (FLOATING BUBBLE) --- */}
+      <AnimatePresence>
+        {selectedMessage && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/10 backdrop-blur-[2px]" onClick={() => setSelectedMessage(null)}>
+                <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} onClick={e => e.stopPropagation()} className="bg-white rounded-2xl shadow-2xl p-4 flex flex-col gap-2 min-w-[200px]">
+                    <h3 className="text-center font-bold text-gray-300 text-xs mb-2 uppercase tracking-widest">Options</h3>
+                    <button onClick={handleReply} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl font-medium text-gray-700 text-sm"><Reply size={18} /> Reply</button>
+                    {selectedMessage.type === 'text' && <button onClick={handleCopyText} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl font-medium text-gray-700 text-sm"><Copy size={18} /> Copy Text</button>}
+                    {selectedMessage.image && <button onClick={handleDownloadImage} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl font-medium text-gray-700 text-sm"><Download size={18} /> Save Image</button>}
+                    <button onClick={handleForwardStart} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl font-medium text-gray-700 text-sm"><Forward size={18} /> Forward</button>
+                    {selectedMessage.sender === currentUser && <button onClick={handleDeleteMessage} className="flex items-center gap-3 p-3 hover:bg-red-50 rounded-xl font-bold text-red-500 text-sm"><Trash2 size={18} /> Delete</button>}
+                </motion.div>
+            </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* --- SEARCH / FORWARD MODAL --- */}
       <AnimatePresence>
         {isSearchOpen && (
@@ -613,9 +607,11 @@ const ChatPage = ({ currentUser, initialChatId, onBack, onCallStart }) => {
                         <input autoFocus placeholder="Search user..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="flex-1 p-2 outline-none text-sm placeholder-gray-400 bg-transparent"/>
                     </div>
                     <div className="flex-1 overflow-y-auto p-2">
-                        <p className="px-4 py-2 text-xs font-bold text-gray-400 uppercase tracking-wider">Suggested</p>
-                        {searchResults.length > 0 ? (
-                            searchResults.map(user => (
+                        <p className="px-4 py-2 text-xs font-bold text-gray-400 uppercase tracking-wider">{searchQuery ? "Results" : "Recent Chats"}</p>
+                        
+                        {/* ⚡ UPDATED: Show Recent Chats if Search is Empty */}
+                        {(searchQuery ? searchResults : displayList).length > 0 ? (
+                            (searchQuery ? searchResults : displayList).map(user => (
                                 <div key={user} onClick={() => handleStartChat(user)} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl cursor-pointer transition">
                                     <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-sm font-bold text-gray-600">{user ? user[0].toUpperCase() : "?"}</div>
                                     <div className="flex-1">

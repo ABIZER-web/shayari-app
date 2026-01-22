@@ -115,14 +115,11 @@ function App() {
   const handleAcceptCall = async () => {
       if (!incomingCall) return;
       await updateDoc(doc(db, "calls", incomingCall.id), { status: 'connected' });
-      
-      // ✅ UPDATED: Pass 'type' (audio/video) to session
       setActiveCallSession({ 
           id: incomingCall.id, 
-          isCaller: false,
+          isCaller: false, 
           type: incomingCall.type 
       });
-      
       setIncomingCall(null);
   };
 
@@ -154,7 +151,13 @@ function App() {
     setShowNotificationsDesktop(false);
     pushToHistory();
     if (profileName) setViewingProfile(profileName);
-    if (chatId !== undefined) setActiveChatId(chatId);
+    
+    if (chatId !== undefined) {
+        setActiveChatId(chatId);
+    } else if (targetView === 'chat' && chatId === null) {
+        setActiveChatId(null); 
+    }
+
     if (postId) setViewingPostId(postId);
     setView(targetView);
     window.scrollTo(0, 0);
@@ -197,14 +200,14 @@ function App() {
 
   if (!currentUser) return <Login onLogin={handleLogin} />;
 
-  const isFullScreenMobile = view === 'chat';
+  // Mobile: Hide header when in a chat conversation
+  const isFullScreenMobile = view === 'chat' && activeChatId;
 
   return (
     <div className="min-h-screen bg-white text-gray-900 font-sans flex flex-col md:flex-row">
       
       {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onLogout={handleLogout} />}
       
-      {/* ✅ UPDATED: Pass 'callType' to VideoCall */}
       {activeCallSession && (
         <VideoCall 
             callId={activeCallSession.id} 
@@ -234,31 +237,46 @@ function App() {
       <div className="hidden md:flex flex-col w-[80px] lg:w-[245px] h-screen border-r border-gray-200 fixed left-0 top-0 z-50 bg-white px-3 py-8 justify-between">
         <div className="space-y-2">
             <div className="px-3 mb-8 cursor-pointer" onClick={() => handleNav('home')}>
-                <img src="/logo.png" alt="Logo" className="hidden lg:block h-14 w-auto object-contain" />
-                <Instagram className="lg:hidden w-8 h-8" />
+                <img src="/logo.png" alt="ShayariGram" className="h-14 w-auto object-contain" />
             </div>
             <SidebarItem icon={Home} label="Home" isActive={view === 'home'} onClick={() => handleNav('home')} />
-            <SidebarItem icon={Search} label="Search" isActive={view === 'explore'} onClick={() => handleNav('explore')} />
-            <SidebarItem icon={PlusSquare} label="Create" isActive={view === 'post'} onClick={() => handleNav('post')} />
             <SidebarItem icon={MessageCircle} label="Messages" isActive={view === 'chat'} onClick={() => handleNav('chat', null, null)} alert={hasUnreadMsg} />
+            <SidebarItem icon={Search} label="Search" isActive={view === 'explore'} onClick={() => handleNav('explore')} />
             <SidebarItem icon={Heart} label="Notifications" isActive={showNotificationsDesktop} onClick={() => setShowNotificationsDesktop(!showNotificationsDesktop)} alert={hasUnreadNotif} />
+            <SidebarItem icon={PlusSquare} label="Create" isActive={view === 'post'} onClick={() => handleNav('post')} />
             <SidebarItem icon={User} label="Profile" isActive={view === 'profile' && viewingProfile === currentUser} onClick={() => handleNav('profile', currentUser)} />
         </div>
         <div><SidebarItem icon={Menu} label="More" onClick={() => setShowSettings(true)} /></div>
       </div>
 
+      {/* --- 📱 MOBILE TOP HEADER (Added) --- */}
       {!isFullScreenMobile && (
-        <div className="md:hidden fixed top-0 w-full h-[60px] border-b border-gray-200 bg-white z-40 flex justify-between items-center px-4 shadow-sm">
-            <img src="/logo.png" alt="ShayariGram" className="h-12 w-auto" />
-            <div className="flex items-center gap-4">
-                <button onClick={() => handleNav('notifications')} className="relative">
-                    <Heart size={24} className="text-gray-800" />
-                    {hasUnreadNotif && <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full"></span>}
+        <div className="md:hidden fixed top-0 w-full h-[60px] border-b border-gray-200 bg-white z-40 px-4 shadow-sm grid grid-cols-3 items-center">
+            
+            {/* LEFT: New Post Icon */}
+            <div className="flex justify-start">
+                <button onClick={() => handleNav('post')}>
+                    <PlusSquare size={26} className="text-gray-800" />
                 </button>
-                <button onClick={() => handleNav('chat', null, null)} className="relative">
-                    <MessageCircle size={24} className="text-gray-800" />
-                    {hasUnreadMsg && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] text-white flex items-center justify-center">1</span>}
-                </button>
+            </div>
+
+            {/* CENTER: Logo */}
+            <div className="flex justify-center">
+                <img src="/logo.png" alt="ShayariGram" className="h-8 w-auto" />
+            </div>
+
+            {/* RIGHT: Notifications OR Menu (Based on View) */}
+            <div className="flex justify-end">
+                {view === 'profile' ? (
+                    <button onClick={() => setShowSettings(true)} className="relative">
+                        <Menu size={26} className="text-gray-800" />
+                    </button>
+                ) : (
+                    <button onClick={() => handleNav('notifications')} className="relative">
+                        <Heart size={26} className="text-gray-800" />
+                        {hasUnreadNotif && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
+                    </button>
+                )}
             </div>
         </div>
       )}
@@ -276,7 +294,7 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* --- MAIN CONTENT AREA (Full Width, Centered) --- */}
+      {/* --- MAIN CONTENT AREA --- */}
       <div className={`flex-1 md:ml-[80px] lg:ml-[245px] bg-white min-h-screen transition-all duration-300 ${isFullScreenMobile ? 'pt-0 pb-0' : 'pt-[65px] pb-[65px] md:pt-0 md:pb-0'}`}>
         <div className="w-full h-full flex justify-center"> 
             <AnimatePresence mode="wait">
@@ -294,26 +312,43 @@ function App() {
                 {view === "profile" && <motion.div key="profile" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-8 px-0 w-full max-w-4xl"><ProfilePage profileUser={viewingProfile} currentUser={currentUser} onBack={handleBack} onPostClick={(id) => handleNav('singlePost', null, null, id)} onNavigateToChat={(chatId) => handleNav('chat', null, chatId)} onProfileClick={(uid) => handleNav('profile', uid)} onLogout={handleLogout} /></motion.div>}
                 {view === "notifications" && <motion.div key="notifications" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:hidden pt-2 w-full"><Notifications currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onProfileClick={(uid) => handleNav('profile', uid)} /></motion.div>}
                 
-                {/* ✅ UPDATED: Receive 'type' in ChatPage callback */}
-                {view === "chat" && <motion.div key="chat" initial="initial" animate="in" exit="out" variants={pageVariants} className="h-full w-full md:p-6 max-w-6xl"><ChatPage currentUser={currentUser} initialChatId={activeChatId} onBack={handleBack} onCallStart={(callId, type) => setActiveCallSession({ id: callId, isCaller: true, type: type })} /></motion.div>}
+                {view === "chat" && (
+                    <motion.div key="chat" initial="initial" animate="in" exit="out" variants={pageVariants} className="h-full w-full md:p-6 max-w-6xl">
+                        <ChatPage 
+                            currentUser={currentUser} 
+                            initialChatId={activeChatId} 
+                            onBack={handleBack} 
+                            onChatSelect={(id) => setActiveChatId(id)}
+                            onCallStart={(callId, type) => setActiveCallSession({ id: callId, isCaller: true, type: type })} 
+                        />
+                    </motion.div>
+                )}
                 
                 {view === "singlePost" && <motion.div key="singlePost" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><SinglePostView postId={viewingPostId} onBack={handleBack} onProfileClick={(uid) => handleNav('profile', uid)} /></div></motion.div>}
             </AnimatePresence>
         </div>
       </div>
 
+      {/* --- 📱 MOBILE BOTTOM NAV (Updated: Removed Menu Icon) --- */}
       {!isFullScreenMobile && (
         <div className="md:hidden fixed bottom-0 w-full h-[60px] border-t border-gray-200 bg-white z-40 flex justify-around items-center pb-safe">
           <NavButton icon={Home} isActive={view === 'home'} onClick={() => handleNav("home")} />
+          
+          <div className="relative">
+             <NavButton icon={MessageCircle} isActive={view === 'chat'} onClick={() => handleNav('chat', null, null)} />
+             {hasUnreadMsg && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white pointer-events-none"></span>}
+          </div>
+
           <NavButton icon={Search} isActive={view === 'explore'} onClick={() => handleNav("explore")} />
-          <NavButton icon={PlusSquare} isActive={view === 'post'} onClick={() => handleNav("post")} />
+          
           <button onClick={() => handleNav("profile", currentUser)} className={`rounded-full p-0.5 border-2 ${view === 'profile' && viewingProfile === currentUser ? 'border-black' : 'border-transparent'}`}>
-             <div className="w-6 h-6 bg-gray-200 rounded-full flex items-center justify-center text-[10px] font-bold text-gray-600">{currentUser[0].toUpperCase()}</div>
+             <div className="w-7 h-7 bg-gray-200 rounded-full flex items-center justify-center text-[10px] font-bold text-gray-600">{currentUser[0].toUpperCase()}</div>
           </button>
         </div>
       )}
 
-      {!isFullScreenMobile && (
+      {/* --- DESKTOP FLOATING MSG BTN --- */}
+      {!isFullScreenMobile && view !== 'chat' && (
         <div className="hidden md:flex fixed bottom-10 right-10 z-[60]">
             <button onClick={() => handleNav('chat', null, null)} className="flex items-center gap-3 bg-white text-black px-6 py-3.5 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-gray-100 hover:shadow-xl hover:scale-105 transition duration-300 group">
                 <div className="relative"><Send size={22} strokeWidth={2} className="group-hover:text-blue-600 transition-colors"/></div><span className="font-bold text-base tracking-wide">Messages</span>
