@@ -28,6 +28,7 @@ const pageTransition = { type: "tween", ease: "easeInOut", duration: 0.2 };
 
 function App() {
   const [currentUser, setCurrentUser] = useState(localStorage.getItem('shayari_user') || null);
+  const [userPhotoURL, setUserPhotoURL] = useState(null); 
   const [view, setView] = useState(localStorage.getItem('shayari_current_view') || "home");
   
   // Navigation State
@@ -57,7 +58,7 @@ function App() {
     if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
   }, []);
 
-  // --- ONLINE PRESENCE ---
+  // --- ONLINE PRESENCE & PROFILE DATA ---
   useEffect(() => {
     if (!currentUser) return;
 
@@ -73,11 +74,21 @@ function App() {
     };
 
     setOnlineStatus(true);
+
+    const userDocRef = doc(db, "users", currentUser);
+    const unsubUser = onSnapshot(userDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+            const data = docSnap.data();
+            setUserPhotoURL(data.photoURL || null);
+        }
+    });
+
     const handleTabClose = () => setOnlineStatus(false);
     window.addEventListener('beforeunload', handleTabClose);
     return () => {
        window.removeEventListener('beforeunload', handleTabClose);
        setOnlineStatus(false);
+       unsubUser();
     };
   }, [currentUser]);
 
@@ -188,19 +199,29 @@ function App() {
     setView("home");
   };
 
-  const SidebarItem = ({ icon: Icon, label, isActive, onClick, alert }) => (
-    <button onClick={onClick} className={`flex items-center gap-4 p-3 rounded-lg w-full transition-all group ${isActive ? 'font-bold' : 'font-normal hover:bg-gray-50'}`}>
-      <div className="relative">
-        <Icon size={28} strokeWidth={isActive ? 2.8 : 2} className={`transition-transform group-hover:scale-105 ${isActive ? 'text-black' : 'text-gray-800'}`} />
+  const SidebarItem = ({ icon: Icon, label, isActive, onClick, alert, imgSrc }) => (
+    <button onClick={onClick} className={`flex items-center p-3 rounded-xl w-full transition-all duration-300 group/item ${isActive ? 'font-bold' : 'hover:bg-gray-50 font-normal'}`}>
+      <div className="relative flex items-center justify-center w-8 h-8 shrink-0">
+        {/* ⚡ Updated Logic: Show Image if imgSrc exists OR label is Profile (defaults to favicon) */}
+        {label === 'Profile' ? (
+            <img 
+                src={imgSrc || "/favicon.png"} 
+                alt="Profile" 
+                className={`w-7 h-7 rounded-full object-cover border transition-transform group-hover/item:scale-110 ${isActive ? 'border-black border-2' : 'border-transparent'}`} 
+            />
+        ) : (
+            <Icon size={26} strokeWidth={isActive ? 2.8 : 2} className={`transition-transform group-hover/item:scale-110 ${isActive ? 'text-black' : 'text-gray-800'}`} />
+        )}
         {alert && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
       </div>
-      <span className={`hidden lg:block text-base ${isActive ? 'text-black' : 'text-gray-800'}`}>{label}</span>
+      <span className={`whitespace-nowrap overflow-hidden opacity-0 w-0 group-hover/sidebar:w-auto group-hover/sidebar:opacity-100 group-hover/sidebar:pl-4 transition-all duration-300 ease-in-out text-base ${isActive ? 'text-black' : 'text-gray-800'}`}>
+        {label}
+      </span>
     </button>
   );
 
   if (!currentUser) return <Login onLogin={handleLogin} />;
 
-  // Mobile: Hide header when in a chat conversation
   const isFullScreenMobile = view === 'chat' && activeChatId;
 
   return (
@@ -234,49 +255,49 @@ function App() {
       </AnimatePresence>
 
       {/* --- DESKTOP SIDEBAR --- */}
-      <div className="hidden md:flex flex-col w-[80px] lg:w-[245px] h-screen border-r border-gray-200 fixed left-0 top-0 z-50 bg-white px-3 py-8 justify-between">
+      <div className="hidden md:flex flex-col h-screen fixed left-0 top-0 z-50 bg-white px-3 py-8 justify-between w-[80px] hover:w-[260px] transition-all duration-300 ease-in-out group/sidebar">
         <div className="space-y-2">
-            <div className="px-3 mb-8 cursor-pointer" onClick={() => handleNav('home')}>
-                <img src="/logo.png" alt="ShayariGram" className="h-14 w-auto object-contain" />
+            <div className="flex items-center p-3 mb-8 cursor-pointer w-full group/item" onClick={() => handleNav('home')}>
+                <div className="relative flex items-center justify-center w-8 h-8 shrink-0">
+                    <img src="/favicon.png" alt="ShayariGram" className="h-8 w-8 object-contain" />
+                </div>
             </div>
+            
             <SidebarItem icon={Home} label="Home" isActive={view === 'home'} onClick={() => handleNav('home')} />
             <SidebarItem icon={MessageCircle} label="Messages" isActive={view === 'chat'} onClick={() => handleNav('chat', null, null)} alert={hasUnreadMsg} />
             <SidebarItem icon={Search} label="Search" isActive={view === 'explore'} onClick={() => handleNav('explore')} />
             <SidebarItem icon={Heart} label="Notifications" isActive={showNotificationsDesktop} onClick={() => setShowNotificationsDesktop(!showNotificationsDesktop)} alert={hasUnreadNotif} />
             <SidebarItem icon={PlusSquare} label="Create" isActive={view === 'post'} onClick={() => handleNav('post')} />
-            <SidebarItem icon={User} label="Profile" isActive={view === 'profile' && viewingProfile === currentUser} onClick={() => handleNav('profile', currentUser)} />
+            
+            {/* ⚡ Profile Item with Default Favicon */}
+            <SidebarItem 
+                icon={User} 
+                label="Profile" 
+                isActive={view === 'profile' && viewingProfile === currentUser} 
+                onClick={() => handleNav('profile', currentUser)} 
+                imgSrc={userPhotoURL || "/favicon.png"} 
+            />
         </div>
+        
         <div><SidebarItem icon={Menu} label="More" onClick={() => setShowSettings(true)} /></div>
       </div>
 
-      {/* --- 📱 MOBILE TOP HEADER (Added) --- */}
-      {!isFullScreenMobile && (
+      {/* --- 📱 MOBILE TOP HEADER --- */}
+      {!isFullScreenMobile && view !== 'chat' && view !== 'post' && view !== 'notifications' && (
         <div className="md:hidden fixed top-0 w-full h-[60px] border-b border-gray-200 bg-white z-40 px-4 shadow-sm grid grid-cols-3 items-center">
-            
-            {/* LEFT: New Post Icon */}
             <div className="flex justify-start">
-                <button onClick={() => handleNav('post')}>
-                    <PlusSquare size={26} className="text-gray-800" />
-                </button>
-            </div>
-
-            {/* CENTER: Logo */}
-            <div className="flex justify-center">
                 <img src="/logo.png" alt="ShayariGram" className="h-8 w-auto" />
             </div>
-
-            {/* RIGHT: Notifications OR Menu (Based on View) */}
-            <div className="flex justify-end">
-                {view === 'profile' ? (
-                    <button onClick={() => setShowSettings(true)} className="relative">
-                        <Menu size={26} className="text-gray-800" />
-                    </button>
-                ) : (
-                    <button onClick={() => handleNav('notifications')} className="relative">
-                        <Heart size={26} className="text-gray-800" />
-                        {hasUnreadNotif && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
-                    </button>
-                )}
+            <div></div>
+            <div className="flex items-center justify-end gap-5">
+                <button onClick={() => handleNav('notifications')} className="relative">
+                    <Heart size={26} className="text-gray-800" />
+                    {hasUnreadNotif && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
+                </button>
+                <button onClick={() => handleNav('chat', null, null)} className="relative">
+                    <MessageCircle size={26} className="text-gray-800" />
+                    {hasUnreadMsg && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] text-white flex items-center justify-center">1</span>}
+                </button>
             </div>
         </div>
       )}
@@ -295,7 +316,7 @@ function App() {
       </AnimatePresence>
 
       {/* --- MAIN CONTENT AREA --- */}
-      <div className={`flex-1 md:ml-[80px] lg:ml-[245px] bg-white min-h-screen transition-all duration-300 ${isFullScreenMobile ? 'pt-0 pb-0' : 'pt-[65px] pb-[65px] md:pt-0 md:pb-0'}`}>
+      <div className={`flex-1 md:ml-[80px] lg:ml-[245px] bg-white min-h-screen transition-all duration-300 ${isFullScreenMobile || view === 'post' || view === 'notifications' ? 'pt-0 pb-0' : 'pt-[65px] pb-[65px] md:pt-0 md:pb-0'}`}>
         <div className="w-full h-full flex justify-center"> 
             <AnimatePresence mode="wait">
                 {view === "home" && (
@@ -308,9 +329,12 @@ function App() {
                 )}
 
                 {view === "explore" && <motion.div key="explore" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-6 px-2 w-full max-w-4xl"><Explore onProfileClick={(uid) => handleNav('profile', uid)} /></motion.div>}
-                {view === "post" && <motion.div key="post" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><h2 className="text-xl font-bold mb-6 text-center md:text-left">Create new post</h2><PostShayari username={currentUser} /></div></motion.div>}
+                
+                {view === "post" && <motion.div key="post" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><PostShayari username={currentUser} onBack={handleBack} /></div></motion.div>}
+                
                 {view === "profile" && <motion.div key="profile" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-8 px-0 w-full max-w-4xl"><ProfilePage profileUser={viewingProfile} currentUser={currentUser} onBack={handleBack} onPostClick={(id) => handleNav('singlePost', null, null, id)} onNavigateToChat={(chatId) => handleNav('chat', null, chatId)} onProfileClick={(uid) => handleNav('profile', uid)} onLogout={handleLogout} /></motion.div>}
-                {view === "notifications" && <motion.div key="notifications" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:hidden pt-2 w-full"><Notifications currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onProfileClick={(uid) => handleNav('profile', uid)} /></motion.div>}
+                
+                {view === "notifications" && <motion.div key="notifications" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:hidden w-full"><Notifications currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onProfileClick={(uid) => handleNav('profile', uid)} onBack={handleBack} /></motion.div>}
                 
                 {view === "chat" && (
                     <motion.div key="chat" initial="initial" animate="in" exit="out" variants={pageVariants} className="h-full w-full md:p-6 max-w-6xl">
@@ -329,20 +353,20 @@ function App() {
         </div>
       </div>
 
-      {/* --- 📱 MOBILE BOTTOM NAV (Updated: Removed Menu Icon) --- */}
+      {/* --- MOBILE BOTTOM NAV --- */}
       {!isFullScreenMobile && (
         <div className="md:hidden fixed bottom-0 w-full h-[60px] border-t border-gray-200 bg-white z-40 flex justify-around items-center pb-safe">
           <NavButton icon={Home} isActive={view === 'home'} onClick={() => handleNav("home")} />
-          
-          <div className="relative">
-             <NavButton icon={MessageCircle} isActive={view === 'chat'} onClick={() => handleNav('chat', null, null)} />
-             {hasUnreadMsg && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white pointer-events-none"></span>}
-          </div>
-
           <NavButton icon={Search} isActive={view === 'explore'} onClick={() => handleNav("explore")} />
+          <NavButton icon={PlusSquare} isActive={view === 'post'} onClick={() => handleNav("post")} />
           
           <button onClick={() => handleNav("profile", currentUser)} className={`rounded-full p-0.5 border-2 ${view === 'profile' && viewingProfile === currentUser ? 'border-black' : 'border-transparent'}`}>
-             <div className="w-7 h-7 bg-gray-200 rounded-full flex items-center justify-center text-[10px] font-bold text-gray-600">{currentUser[0].toUpperCase()}</div>
+             {/* ⚡ Mobile Fallback to Favicon */}
+             <img 
+                src={userPhotoURL || "/favicon.png"} 
+                alt="Profile" 
+                className="w-7 h-7 rounded-full object-cover border border-gray-200" 
+             />
           </button>
         </div>
       )}

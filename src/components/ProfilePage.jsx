@@ -11,16 +11,22 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
   const [userPosts, setUserPosts] = useState([]);
   const [savedPosts, setSavedPosts] = useState([]); 
   
-  // Profile Data
-  const [userData, setUserData] = useState({ bio: "", location: "", photoURL: null, followers: [], following: [], username: "", saved: [] });
+  const [userData, setUserData] = useState({ 
+      bio: "", 
+      location: "", 
+      photoURL: null, 
+      followers: [], 
+      following: [], 
+      username: "", 
+      fullName: "", 
+      saved: [] 
+  });
   const [loading, setLoading] = useState(true);
   
-  // Modals
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [followModal, setFollowModal] = useState({ isOpen: false, type: null, users: [], loading: false });
 
-  // Social State
   const [isFollowing, setIsFollowing] = useState(false);
   const [isFollowedBy, setIsFollowedBy] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
@@ -28,13 +34,10 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
 
   const isOwnProfile = profileUser === currentUser;
 
-  // --- 1. FETCH PROFILE DATA & SAVED POSTS ---
   useEffect(() => {
     setLoading(true);
-
     const userRef = doc(db, "users", profileUser);
     
-    // Listen to User Document
     const unsubscribeUser = onSnapshot(userRef, async (docSnap) => {
         if (docSnap.exists()) {
             const data = docSnap.data();
@@ -49,7 +52,6 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
             if (data.following && data.following.includes(currentUser)) setIsFollowedBy(true);
             else setIsFollowedBy(false);
 
-            // FETCH SAVED POSTS
             if (isOwnProfile && data.saved && data.saved.length > 0) {
                 try {
                     const promises = data.saved.map(id => getDoc(doc(db, "shayaris", id)));
@@ -59,21 +61,16 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
                         .map(d => ({ id: d.id, ...d.data() }));
                     
                     setSavedPosts(fetchedSaved);
-                } catch (error) {
-                    console.error("Error fetching saved posts:", error);
-                }
-            } else {
-                setSavedPosts([]);
-            }
+                } catch (error) { console.error("Error fetching saved posts:", error); }
+            } else { setSavedPosts([]); }
 
         } else {
-            setUserData({ bio: "", photoURL: null, followers: [], following: [], saved: [] });
+            setUserData({ bio: "", photoURL: null, followers: [], following: [], username: profileUser, fullName: "", saved: [] });
             setSavedPosts([]);
         }
         setLoading(false);
     });
 
-    // Fetch User's Created Posts
     const q = query(collection(db, "shayaris"), where("author", "==", profileUser));
     const unsubscribePosts = onSnapshot(q, (snapshot) => {
       const posts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -84,11 +81,9 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
     return () => { unsubscribeUser(); unsubscribePosts(); };
   }, [profileUser, isOwnProfile, currentUser]); 
 
-  // --- 2. SOCIAL ACTIONS ---
   const handleFollowToggle = async () => {
     const myRef = doc(db, "users", currentUser);
     const targetRef = doc(db, "users", profileUser);
-
     try {
         if (isFollowing) {
             await updateDoc(myRef, { following: arrayRemove(profileUser) });
@@ -98,7 +93,6 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
             await setDoc(targetRef, { uid: profileUser }, { merge: true });
             await updateDoc(myRef, { following: arrayUnion(profileUser) });
             await updateDoc(targetRef, { followers: arrayUnion(currentUser) });
-
             await addDoc(collection(db, "notifications"), {
                 type: "follow",
                 fromUser: currentUser,
@@ -120,7 +114,6 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
     if (onNavigateToChat) onNavigateToChat(chatId);
   };
 
-  // --- 3. FOLLOW LIST LOGIC ---
   const openFollowList = async (type) => {
     setFollowModal({ isOpen: true, type, users: [], loading: true });
     try {
@@ -151,18 +144,18 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
   return (
     <div className="bg-white min-h-screen pb-20 font-sans text-gray-900 relative">
       
-      {/* --- MODALS --- */}
       {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} currentUser={currentUser} onPostClick={onPostClick} />}
       
       {isEditOpen && (
         <EditProfileModal 
             currentUser={currentUser}
-            currentFullName={userData.fullName}
+            currentFullName={userData.fullName} 
+            currentBio={userData.bio}
+            currentPhoto={userData.photoURL}
             onClose={() => setIsEditOpen(false)}
         />
       )}
 
-      {/* --- FOLLOW LIST MODAL --- */}
       <AnimatePresence>
         {followModal.isOpen && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={closeFollowModal}>
@@ -176,7 +169,10 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
                             <div className="space-y-1">
                                 {followModal.users.map(u => (
                                     <div key={u.uid} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition cursor-pointer" onClick={() => { closeFollowModal(); if (onProfileClick) onProfileClick(u.uid); }}>
-                                        <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-gray-200 to-gray-300 flex items-center justify-center overflow-hidden flex-shrink-0">{u.photoURL ? <img src={u.photoURL} alt={u.username} className="w-full h-full object-cover"/> : <span className="font-bold text-gray-600 text-sm">{u.username[0].toUpperCase()}</span>}</div>
+                                        <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-gray-200 to-gray-300 flex items-center justify-center overflow-hidden flex-shrink-0">
+                                            {/* ⚡ Follow List Favicon Fallback */}
+                                            <img src={u.photoURL || "/favicon.png"} alt={u.username} className="w-full h-full object-cover"/>
+                                        </div>
                                         <div className="flex-1 min-w-0"><h4 className="font-bold text-sm text-gray-900">@{u.username}</h4><p className="text-xs text-gray-500 truncate">{u.bio || "No bio"}</p></div>
                                     </div>
                                 ))}
@@ -191,19 +187,22 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
       <div className="w-full max-w-4xl mx-auto px-4 md:px-10 pt-6 pb-20">
         <div className="flex flex-col md:flex-row items-center md:items-start gap-8 mb-10">
           
-          {/* Avatar */}
           <motion.div initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="relative group shrink-0">
             <div className="w-24 h-24 md:w-40 md:h-40 rounded-full bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-500 p-[3px] shadow-sm">
               <div className="w-full h-full bg-white rounded-full overflow-hidden flex items-center justify-center p-[2px]">
-                {userData.photoURL ? <img src={userData.photoURL} alt={profileUser} className="w-full h-full object-cover rounded-full"/> : <span className="text-gray-800 text-4xl md:text-6xl font-bold">{(userData.username || profileUser)[0].toUpperCase()}</span>}
+                {/* ⚡ Main Profile Pic Fallback */}
+                <img 
+                    src={userData.photoURL || "/favicon.png"} 
+                    alt={profileUser} 
+                    className="w-full h-full object-cover rounded-full"
+                />
               </div>
             </div>
           </motion.div>
 
-          {/* Info */}
           <div className="flex-1 flex flex-col items-center md:items-start gap-4 text-center md:text-left">
             <div className="flex flex-col md:flex-row items-center gap-4">
-                <h2 className="text-2xl font-light text-gray-800">@{userData.username || profileUser}</h2>
+                <h2 className="text-2xl font-light text-gray-800">{userData.username || profileUser}</h2>
                 <div className="flex gap-2">
                     {isOwnProfile ? (
                         <button onClick={() => setIsEditOpen(true)} className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-semibold transition">Edit Profile</button>
@@ -223,8 +222,8 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
             </div>
 
             <div className="space-y-1">
-                <p className="font-semibold text-gray-900">{userData.fullName || userData.username || profileUser}</p>
-                <p className="text-gray-800 whitespace-pre-wrap text-sm leading-snug">{userData.bio || "✨ Just a poet sharing thoughts."}</p>
+                <p className="font-bold text-gray-900 text-sm">{userData.fullName || userData.username}</p>
+                <p className="text-gray-800 whitespace-pre-wrap text-sm leading-snug">{userData.bio || ""}</p>
                 {userData.location && <p className="text-xs text-gray-500 flex items-center justify-center md:justify-start gap-1 pt-1"><MapPin size={12}/> {userData.location}</p>}
             </div>
           </div>
