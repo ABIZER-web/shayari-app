@@ -31,6 +31,9 @@ function App() {
   const [userPhotoURL, setUserPhotoURL] = useState(null); 
   const [view, setView] = useState(localStorage.getItem('shayari_current_view') || "home");
   
+  // ⚡ New State for Account Switching Feature
+  const [isSwitchingAccount, setIsSwitchingAccount] = useState(false);
+
   // Navigation State
   const [viewingProfile, setViewingProfile] = useState(localStorage.getItem('shayari_last_profile') || null); 
   const [viewingPostId, setViewingPostId] = useState(null);
@@ -75,6 +78,7 @@ function App() {
 
     setOnlineStatus(true);
 
+    // ⚡ Fetch Profile Pic (Defaults to null if missing)
     const userDocRef = doc(db, "users", currentUser);
     const unsubUser = onSnapshot(userDocRef, (docSnap) => {
         if (docSnap.exists()) {
@@ -177,6 +181,7 @@ function App() {
   const handleLogin = (username) => {
     setCurrentUser(username);
     localStorage.setItem('shayari_user', username);
+    setIsSwitchingAccount(false); // ⚡ Close switch mode on successful login
   };
 
   const handleLogout = async () => {
@@ -220,7 +225,15 @@ function App() {
     </button>
   );
 
-  if (!currentUser) return <Login onLogin={handleLogin} />;
+  // ⚡ Updated Login Render Logic: Shows login if no user OR if switching account
+  if (!currentUser || isSwitchingAccount) {
+      return (
+        <Login 
+            onLogin={handleLogin} 
+            onBack={isSwitchingAccount ? () => setIsSwitchingAccount(false) : null} 
+        />
+      );
+  }
 
   const isFullScreenMobile = view === 'chat' && activeChatId;
 
@@ -257,9 +270,10 @@ function App() {
       {/* --- DESKTOP SIDEBAR --- */}
       <div className="hidden md:flex flex-col h-screen fixed left-0 top-0 z-50 bg-white px-3 py-8 justify-between w-[80px] hover:w-[260px] transition-all duration-300 ease-in-out group/sidebar">
         <div className="space-y-2">
+            {/* LOGO */}
             <div className="flex items-center p-3 mb-8 cursor-pointer w-full group/item" onClick={() => handleNav('home')}>
                 <div className="relative flex items-center justify-center w-8 h-8 shrink-0">
-                    <img src="/favicon.png" alt="ShayariGram" className="h-8 w-8 object-contain" />
+                    <img src="/logo.png" alt="ShayariGram" className="h-8 w-8 object-contain" />
                 </div>
             </div>
             
@@ -336,6 +350,7 @@ function App() {
                 
                 {view === "notifications" && <motion.div key="notifications" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:hidden w-full"><Notifications currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onProfileClick={(uid) => handleNav('profile', uid)} onBack={handleBack} /></motion.div>}
                 
+                {/* ⚡ Pass onSwitchAccount trigger to ChatPage */}
                 {view === "chat" && (
                     <motion.div key="chat" initial="initial" animate="in" exit="out" variants={pageVariants} className="h-full w-full md:p-6 max-w-6xl">
                         <ChatPage 
@@ -344,6 +359,7 @@ function App() {
                             onBack={handleBack} 
                             onChatSelect={(id) => setActiveChatId(id)}
                             onCallStart={(callId, type) => setActiveCallSession({ id: callId, isCaller: true, type: type })} 
+                            onSwitchAccount={() => setIsSwitchingAccount(true)}
                         />
                     </motion.div>
                 )}

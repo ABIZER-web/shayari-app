@@ -3,9 +3,9 @@ import { auth, db, googleProvider } from '../firebase';
 import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
 import { motion } from 'framer-motion';
-import { X, ChevronLeft } from 'lucide-react';
+import { X, ChevronLeft, ArrowLeft } from 'lucide-react'; // ⚡ Added ArrowLeft
 
-const Login = ({ onLogin }) => {
+const Login = ({ onLogin, onBack }) => { // ⚡ Added onBack prop
   // State for toggling Login vs Signup
   const [isLogin, setIsLogin] = useState(true);
   
@@ -201,10 +201,20 @@ const Login = ({ onLogin }) => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4 relative">
       
       {showSavedAccounts && savedAccounts.length > 0 ? (
-          <div className="bg-white w-full max-w-sm p-8 rounded-lg border border-gray-300 shadow-sm text-center">
+          <div className="bg-white w-full max-w-sm p-8 rounded-lg border border-gray-300 shadow-sm text-center relative">
+             {/* ⚡ Back Button for Saved Accounts Screen (Only if onBack exists) */}
+             {onBack && (
+                <button 
+                    onClick={onBack} 
+                    className="absolute top-4 left-4 p-2 text-gray-500 hover:bg-gray-100 rounded-full transition"
+                >
+                    <ArrowLeft size={24} />
+                </button>
+             )}
+
              <img src="/logo.png" alt="ShayariGram" className="h-24 mx-auto mb-8" />
              
              <div className="space-y-4 mb-8">
@@ -259,8 +269,18 @@ const Login = ({ onLogin }) => {
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-white w-full max-w-sm border border-gray-300 shadow-sm rounded-none sm:rounded-lg overflow-hidden"
+        className="bg-white w-full max-w-sm border border-gray-300 shadow-sm rounded-none sm:rounded-lg overflow-hidden relative"
       >
+        {/* ⚡ Back Button for Login/Signup Screen */}
+        {onBack && (
+            <button 
+                onClick={onBack} 
+                className="absolute top-4 left-4 p-2 text-gray-500 hover:bg-gray-100 rounded-full transition z-10"
+            >
+                <ArrowLeft size={24} />
+            </button>
+        )}
+
         <div className="p-8 pb-4">
             <div className="flex justify-center mb-8">
                 <img src="/logo.png" alt="ShayariGram" className="h-24 object-contain" />
