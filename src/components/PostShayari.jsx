@@ -1,359 +1,118 @@
-import { useState, useRef, useEffect } from 'react';
-import { db, storage } from '../firebase'; 
-import { collection, addDoc, serverTimestamp, getDocs, writeBatch, doc, updateDoc } from 'firebase/firestore'; 
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { 
-  Send, 
-  Image as ImageIcon, 
-  X, 
-  Wand2, 
-  RefreshCw, 
-  Type, 
-  AlertTriangle, 
-  Loader2,
-  Square, 
-  Smartphone, 
-  Monitor, 
-  LayoutTemplate, 
-  Crop 
-} from 'lucide-react'; 
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useRef, useEffect } from 'react';
+import { db } from '../firebase'; 
+import { collection, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore'; 
+import { Send, Loader2, Palette, Type, Plus, ChevronLeft } from 'lucide-react'; 
+import { motion } from 'framer-motion';
 
-// --- ASPECT RATIO OPTIONS ---
-const ASPECT_RATIOS = [
-  { id: '1/1', label: 'Square', icon: Square, desc: 'Insta/Feed' },
-  { id: '4/5', label: 'Portrait', icon: LayoutTemplate, desc: 'Ads/Port' },
-  { id: '1.91/1', label: 'Landscp', icon: Crop, desc: 'Ads/Land' },
-  { id: '9/16', label: 'Story', icon: Smartphone, desc: 'Reels/Shorts' },
-  { id: '16/9', label: 'Wide', icon: Monitor, desc: 'YouTube' },
-];
+const COLORS = ['#ffffff', '#000000', '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#a855f7', '#ec4899', '#64748b'];
+const GRADIENTS = ['linear-gradient(to right, #ff7e5f, #feb47b)', 'linear-gradient(to right, #6a11cb, #2575fc)', 'linear-gradient(to right, #43cea2, #185a9d)', 'linear-gradient(to right, #ff416c, #ff4b2b)', 'linear-gradient(to top, #4481eb 0%, #04befe 100%)'];
 
-// --- BulkSeeder Placeholder ---
-const BulkSeeder = () => <div className="p-4 bg-gray-50 rounded-xl text-center text-xs text-gray-400 border border-dashed border-gray-300">Bulk Seeder Available</div>;
-
-const PostShayari = ({ username }) => {
+const PostShayari = ({ username, onBack, editData }) => {
   const [content, setContent] = useState('');
-  // Category state removed (hardcoded to 'General' on submit)
-  const [aspectRatio, setAspectRatio] = useState('1/1'); 
-  
-  const [selectedFile, setSelectedFile] = useState(null); 
-  const [previewImage, setPreviewImage] = useState(null); 
-  const [originalImagePreview, setOriginalImagePreview] = useState(null); 
-
+  const [caption, setCaption] = useState('');
+  const [bgColor, setBgColor] = useState('#ffffff');
+  const [textColor, setTextColor] = useState('#000000');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isTextOnImage, setIsTextOnImage] = useState(false); 
-  const [textChanged, setTextChanged] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false); 
   
-  const canvasRef = useRef(null);
+  // Refs
+  const bgInputRef = useRef(null);
+  const textInputRef = useRef(null);
 
+  // ⚡ Load Data if Editing
   useEffect(() => {
-    if (!isTextOnImage) setTextChanged(false);
-  }, [isTextOnImage]);
-
-  // --- IMAGE HANDLER ---
-  const handleImageChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) { 
-        alert("Image is too large (Max 5MB)");
-        return; 
+      if (editData) {
+          setContent(editData.content || '');
+          setCaption(editData.caption || '');
+          setBgColor(editData.bgColor || editData.background || '#ffffff');
+          setTextColor(editData.textColor || '#000000');
       }
-      setSelectedFile(file); 
-      
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPreviewImage(reader.result);
-        setOriginalImagePreview(reader.result); 
-        setIsTextOnImage(false);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
+  }, [editData]);
 
-  const handleTextChange = (e) => {
-    setContent(e.target.value);
-    if (isTextOnImage) setTextChanged(true);
-  };
-
-  // --- ADMIN: DELETE ALL ---
-  const handleDeleteAll = async () => {
-    if (!window.confirm("⚠️ Are you sure you want to DELETE ALL Shayaris?")) return;
-
-    setIsDeleting(true);
-    try {
-      const querySnapshot = await getDocs(collection(db, "shayaris"));
-      const batch = writeBatch(db);
-      querySnapshot.forEach((doc) => {
-        batch.delete(doc.ref);
-      });
-      await batch.commit();
-      alert("All posts deleted.");
-    } catch (error) {
-      console.error("Error deleting all:", error);
-    }
-    setIsDeleting(false);
-  };
-
-  // --- CANVAS: TEXT ON IMAGE GENERATOR ---
-  const generateCompositeImage = () => {
-    if (!originalImagePreview || !content.trim()) return;
-    setIsGenerating(true);
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const img = new Image();
-
-    img.onload = () => {
-      canvas.width = img.width;
-      canvas.height = img.height;
-      
-      // Draw Image
-      ctx.drawImage(img, 0, 0);
-      
-      // Dark Overlay for readability
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; 
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
-      // Text Settings
-      const fontSize = Math.max(32, canvas.width / 20); 
-      ctx.font = `italic bold ${fontSize}px serif`; 
-      ctx.fillStyle = '#FFFFFF';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      // Add shadow for better contrast
-      ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
-      ctx.shadowBlur = 15;
-      ctx.shadowOffsetX = 4;
-      ctx.shadowOffsetY = 4;
-
-      // Text Wrapping Logic
-      const padding = 60; 
-      const maxWidth = canvas.width - (padding * 2);
-      const paragraphs = content.split('\n'); 
-      let finalLines = [];
-
-      paragraphs.forEach((para) => {
-        if (para.trim() === '') { finalLines.push(' '); return; }
-        const words = para.split(' ');
-        let line = '';
-        for (let n = 0; n < words.length; n++) {
-          const testLine = line + words[n] + ' ';
-          const metrics = ctx.measureText(testLine);
-          if (metrics.width > maxWidth && n > 0) {
-            finalLines.push(line);
-            line = words[n] + ' ';
-          } else {
-            line = testLine;
-          }
-        }
-        finalLines.push(line);
-      });
-      
-      const lineHeight = fontSize * 1.6;
-      const totalTextHeight = finalLines.length * lineHeight;
-      let startY = (canvas.height - totalTextHeight) / 2 + (lineHeight / 2); 
-
-      finalLines.forEach((l, i) => {
-        ctx.fillText(l.trim(), canvas.width / 2, startY + (i * lineHeight));
-      });
-      
-      // Save Result
-      setPreviewImage(canvas.toDataURL('image/jpeg', 0.9));
-      setIsGenerating(false);
-      setIsTextOnImage(true);
-      setTextChanged(false);
-    };
-    img.src = originalImagePreview;
-  };
-
-  const removeTextFromImage = () => {
-    setPreviewImage(originalImagePreview); 
-    setIsTextOnImage(false);
-  };
-
-  const clearAll = () => {
-    setSelectedFile(null);
-    setPreviewImage(null);
-    setOriginalImagePreview(null);
-    setIsTextOnImage(false);
-    setContent('');
-    setAspectRatio('1/1');
-  };
-
-  // --- SUBMIT HANDLER ---
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!content.trim() && !selectedFile) return;
+    if (!content.trim()) return;
 
     setIsSubmitting(true);
     try {
-      // 1. Create the Document FIRST to get an ID
-      const docRef = await addDoc(collection(db, "shayaris"), {
-        content: content, 
-        author: username || "Anonymous", 
-        category: "General", // Default hidden category
-        image: null, 
-        isTextOnImage: isTextOnImage,
-        aspectRatio: aspectRatio,
-        likes: 0,
-        saveCount: 0,
-        shares: 0,
-        comments: [], 
-        likedBy: [], // Initialize empty array for likes
-        timestamp: serverTimestamp()
-      });
-
-      // 2. Handle Image Upload (if exists)
-      if (previewImage) {
-        let blobToUpload = null;
-
-        if (isTextOnImage) {
-            const response = await fetch(previewImage);
-            blobToUpload = await response.blob();
-        } else {
-            blobToUpload = selectedFile;
-        }
-
-        // Upload to Storage
-        const fileName = `${Date.now()}_post.jpg`;
-        const storageRef = ref(storage, `shayaris/${docRef.id}/${fileName}`);
-        const snapshot = await uploadBytes(storageRef, blobToUpload);
-        const finalImageUrl = await getDownloadURL(snapshot.ref);
-
-        // Update the document with the image URL
-        await updateDoc(doc(db, "shayaris", docRef.id), { image: finalImageUrl });
+      if (editData) {
+          // ⚡ Update Existing Post
+          const postRef = doc(db, "shayaris", editData.id);
+          await updateDoc(postRef, {
+              content: content,
+              caption: caption,
+              bgColor: bgColor,
+              textColor: textColor,
+              isEdited: true 
+          });
+          alert("Post updated!");
+      } else {
+          // ⚡ Create New Post
+          await addDoc(collection(db, "shayaris"), {
+            content: content, 
+            caption: caption,
+            author: username || "Anonymous", 
+            timestamp: serverTimestamp(),
+            bgColor: bgColor,      
+            textColor: textColor,
+            likes: 0,
+            shares: 0,
+            commentCount: 0,
+            likedBy: [], 
+          });
+          alert("Shayari posted!");
       }
       
-      clearAll();
-      alert("Post created successfully!");
+      if(onBack) onBack(); 
       
     } catch (err) {
-      console.error("Submission Error:", err);
-      alert("Failed to create post. Check console.");
+      console.error("Error:", err);
+      alert("Failed.");
     }
     setIsSubmitting(false);
   };
 
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }} 
-      animate={{ opacity: 1, y: 0 }} 
-      className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-purple-100 relative font-sans w-full"
-    >
-      <canvas ref={canvasRef} className="hidden"></canvas>
-      
-      <form onSubmit={handleSubmit} className="space-y-5">
-        
-        {/* 1. Ratio Selector */}
-        <div>
-          <label className="block text-xs font-bold text-gray-400 mb-2 uppercase tracking-wide">Select Post Format</label>
-          <div className="grid grid-cols-5 gap-2">
-            {ASPECT_RATIOS.map((ratio) => (
-                <button
-                    key={ratio.id}
-                    type="button"
-                    onClick={() => setAspectRatio(ratio.id)}
-                    className={`flex flex-col items-center justify-center p-2 rounded-xl transition-all border ${
-                        aspectRatio === ratio.id 
-                        ? 'bg-black text-white border-black shadow-lg scale-105' 
-                        : 'bg-gray-50 text-gray-500 border-transparent hover:bg-gray-100'
-                    }`}
-                >
-                    <ratio.icon size={18} className="mb-1" />
-                    <span className="text-[10px] font-bold">{ratio.label}</span>
-                </button>
-            ))}
-          </div>
-        </div>
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white md:border md:border-gray-100 md:shadow-lg md:rounded-3xl w-full max-w-xl mx-auto min-h-screen md:min-h-0 flex flex-col pb-20 md:pb-6">
+      <div className="flex items-center justify-between p-4 border-b border-gray-100 sticky top-0 bg-white z-10">
+         <div className="flex items-center gap-3">
+             {onBack && <button onClick={onBack} className="p-2 -ml-2 rounded-full hover:bg-gray-100"><ChevronLeft className="text-gray-600"/></button>}
+             <h2 className="text-lg font-bold text-gray-900">{editData ? 'Edit Post' : 'New Post'}</h2>
+         </div>
+         <button onClick={handleSubmit} disabled={isSubmitting || !content.trim()} className="text-blue-600 font-bold text-sm disabled:opacity-50">
+            {isSubmitting ? (editData ? 'Updating...' : 'Posting...') : (editData ? 'Save' : 'Post')}
+         </button>
+      </div>
 
-        {/* 2. Text Area */}
-        <textarea
-          placeholder="Write something beautiful..."
-          className="w-full p-4 border border-gray-200 rounded-2xl h-32 md:h-40 focus:outline-none focus:border-purple-500 bg-gray-50/50 resize-none font-serif text-lg transition placeholder:text-gray-400"
-          value={content}
-          onChange={handleTextChange}
-          maxLength={500}
-        />
+      <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <form className="flex flex-col gap-6 p-4">
+            <div className="space-y-4">
+                <div className="w-full rounded-2xl shadow-sm border border-gray-200 flex items-center justify-center min-h-[300px] p-6 transition-all duration-300" style={{ background: bgColor }}>
+                  <textarea placeholder="Write your shayari here..." className="w-full h-full bg-transparent border-none text-center text-2xl font-serif font-medium placeholder-gray-400 focus:ring-0 resize-none outline-none leading-relaxed" style={{ color: textColor }} rows="6" value={content} onChange={(e) => setContent(e.target.value)} maxLength={500} required />
+                </div>
 
-        {/* 3. Image Preview Area */}
-        <AnimatePresence>
-        {previewImage && (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }} 
-            animate={{ opacity: 1, scale: 1 }} 
-            exit={{ opacity: 0, scale: 0.9 }} 
-            className="relative w-full bg-gray-100 rounded-2xl overflow-hidden shadow-inner group border border-gray-200 flex items-center justify-center"
-            style={{ aspectRatio: aspectRatio }} 
-          >
-            <img 
-                src={previewImage} 
-                alt="Preview" 
-                className="w-full h-full object-cover" 
-            />
-            
-            <button type="button" onClick={clearAll} className="absolute top-3 right-3 bg-black/60 text-white p-2 rounded-full hover:bg-red-600 backdrop-blur-sm transition z-10"><X size={18} /></button>
-            
-            <div className="absolute bottom-3 right-3 flex flex-wrap justify-end gap-2 items-end z-10 p-2 w-full">
-              {isTextOnImage && textChanged && !isGenerating && (
-                <button type="button" onClick={generateCompositeImage} className="bg-yellow-500 text-white px-4 py-2 rounded-full font-bold text-xs flex items-center gap-2 shadow-xl hover:bg-yellow-600 transition animate-bounce">
-                  <RefreshCw size={14}/> Update Text
-                </button>
-              )}
-              {selectedFile && content.trim() && !isTextOnImage && !isGenerating && (
-                  <button type="button" onClick={generateCompositeImage} className="bg-indigo-600 text-white px-4 py-2 rounded-full font-bold text-xs flex items-center gap-2 shadow-xl hover:bg-indigo-700 transition">
-                    <Wand2 size={14}/> Add Text to Image
-                  </button>
-              )}
-              {isTextOnImage && !isGenerating && (
-                <button type="button" onClick={removeTextFromImage} className="bg-white/90 text-red-600 border border-red-100 px-4 py-2 rounded-full font-bold text-xs flex items-center gap-2 shadow-xl hover:bg-red-50 transition">
-                  <Type size={14}/> Remove Text
-                </button>
-              )}
-              {isGenerating && (
-                  <div className="bg-black/70 text-white px-4 py-2 rounded-full font-bold text-xs backdrop-blur-sm">
-                    Processing...
-                  </div>
-              )}
+                <div className="space-y-4 px-2">
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-gray-400 uppercase">Background</label>
+                        <div className="flex gap-3 overflow-x-auto py-1 px-1 no-scrollbar items-center">
+                            <div className="relative group shrink-0"><input ref={bgInputRef} type="color" onChange={(e) => setBgColor(e.target.value)} className="absolute opacity-0 inset-0 w-full h-full cursor-pointer z-10" /><button type="button" className="w-9 h-9 rounded-full border-2 border-gray-200 flex items-center justify-center bg-gradient-to-tr from-pink-500 to-yellow-500 shadow-sm"><Plus size={16} className="text-white" /></button></div>
+                            {[...GRADIENTS, ...COLORS].map((c, i) => <button key={i} type="button" onClick={() => setBgColor(c)} className={`w-9 h-9 rounded-full shrink-0 border-2 transition-transform shadow-sm ${bgColor === c ? 'border-black scale-110' : 'border-transparent'}`} style={{ background: c }} />)}
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-gray-400 uppercase">Text Color</label>
+                        <div className="flex gap-3 overflow-x-auto py-1 px-1 no-scrollbar items-center">
+                            <div className="relative group shrink-0"><input ref={textInputRef} type="color" onChange={(e) => setTextColor(e.target.value)} className="absolute opacity-0 inset-0 w-full h-full cursor-pointer z-10" /><button type="button" className="w-9 h-9 rounded-full border-2 border-gray-200 flex items-center justify-center bg-black shadow-sm"><Type size={16} className="text-white" /></button></div>
+                            {COLORS.map((c, i) => <button key={i} type="button" onClick={() => setTextColor(c)} className={`w-9 h-9 rounded-full shrink-0 border-2 transition-transform shadow-sm ${textColor === c ? 'border-gray-900 scale-110' : 'border-gray-100'}`} style={{ backgroundColor: c }} />)}
+                        </div>
+                    </div>
+                </div>
             </div>
-          </motion.div>
-        )}
-        </AnimatePresence>
-
-        {/* Bottom Toolbar */}
-        <div className="flex justify-between items-center pt-2">
-          <label className="cursor-pointer flex items-center gap-2 text-gray-600 hover:text-purple-600 transition bg-gray-100 px-5 py-2.5 rounded-full font-semibold hover:bg-gray-200">
-            <input type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
-            <ImageIcon size={20} />
-            <span className="text-sm hidden md:inline">Add Photo</span>
-          </label>
-
-          <motion.button 
-            whileHover={{ scale: 1.05 }} 
-            whileTap={{ scale: 0.95 }}
-            disabled={isSubmitting || isGenerating || (!content && !selectedFile)}
-            className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-8 py-2.5 rounded-full font-bold flex items-center gap-2 hover:opacity-90 transition disabled:opacity-50 shadow-md text-base"
-          >
-            {isSubmitting ? <><Loader2 size={18} className="animate-spin"/> Posting...</> : <>Post <Send size={18} className="ml-1" /></>}
-          </motion.button>
-        </div>
-      </form>
-      
-      {/* Admin Panel */}
-      {username === 'admin' && (
-        <div className="mt-8 pt-6 border-t border-gray-200 space-y-4">
-          <h4 className="text-sm font-bold text-gray-400 uppercase tracking-widest text-center mb-4">Admin Zone</h4>
-          <BulkSeeder />
-          <button 
-            onClick={handleDeleteAll}
-            disabled={isDeleting}
-            className="w-full border-2 border-red-100 bg-red-50 text-red-600 px-4 py-3 rounded-xl font-bold shadow-sm hover:bg-red-600 hover:text-white transition flex items-center justify-center gap-2"
-          >
-            {isDeleting ? "Deleting..." : <><AlertTriangle size={20} /> DELETE ALL SHAYARIS</>}
-          </button>
-        </div>
-      )}
+            <div className="h-2 bg-gray-50 -mx-4"></div>
+            <div className="flex gap-3">
+                <textarea value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Write a caption..." className="w-full text-sm border-none focus:ring-0 p-0 resize-none h-24 placeholder-gray-400 leading-relaxed" />
+            </div>
+          </form>
+      </div>
     </motion.div>
   );
 };

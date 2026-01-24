@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, doc, getDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove, setDoc, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Grid, Bookmark, MapPin, X } from 'lucide-react'; 
+import { Grid, Bookmark, MapPin, X, Heart, MessageCircle } from 'lucide-react'; 
 import { motion, AnimatePresence } from 'framer-motion';
 import SettingsModal from './SettingsModal'; 
 import EditProfileModal from './EditProfileModal'; 
@@ -74,6 +74,7 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
     const q = query(collection(db, "shayaris"), where("author", "==", profileUser));
     const unsubscribePosts = onSnapshot(q, (snapshot) => {
       const posts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Sort client-side to avoid complex index requirements if not set up
       posts.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
       setUserPosts(posts);
     });
@@ -156,6 +157,7 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
         />
       )}
 
+      {/* FOLLOW LIST MODAL */}
       <AnimatePresence>
         {followModal.isOpen && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={closeFollowModal}>
@@ -170,7 +172,6 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
                                 {followModal.users.map(u => (
                                     <div key={u.uid} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition cursor-pointer" onClick={() => { closeFollowModal(); if (onProfileClick) onProfileClick(u.uid); }}>
                                         <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-gray-200 to-gray-300 flex items-center justify-center overflow-hidden flex-shrink-0">
-                                            {/* ⚡ Follow List Favicon Fallback */}
                                             <img src={u.photoURL || "/favicon.png"} alt={u.username} className="w-full h-full object-cover"/>
                                         </div>
                                         <div className="flex-1 min-w-0"><h4 className="font-bold text-sm text-gray-900">@{u.username}</h4><p className="text-xs text-gray-500 truncate">{u.bio || "No bio"}</p></div>
@@ -190,7 +191,6 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
           <motion.div initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="relative group shrink-0">
             <div className="w-24 h-24 md:w-40 md:h-40 rounded-full bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-500 p-[3px] shadow-sm">
               <div className="w-full h-full bg-white rounded-full overflow-hidden flex items-center justify-center p-[2px]">
-                {/* ⚡ Main Profile Pic Fallback */}
                 <img 
                     src={userData.photoURL || "/favicon.png"} 
                     alt={profileUser} 
@@ -236,22 +236,37 @@ const ProfilePage = ({ profileUser, currentUser, onBack, onPostClick, onNavigate
 
         <div className="min-h-[300px]">
             {loading ? <div className="text-center py-20 text-gray-400">Loading...</div> : (
-                <div className="grid grid-cols-3 gap-0.5 md:gap-6">
+                <div className="grid grid-cols-3 gap-0.5 md:gap-4">
                     {(activeTab === 'posts' ? userPosts : savedPosts).length > 0 ? (
-                        (activeTab === 'posts' ? userPosts : savedPosts).map(p => (
-                            <div key={p.id} className="aspect-square relative group cursor-pointer bg-gray-100 overflow-hidden" onClick={() => onPostClick && onPostClick(p.id)}>
-                                {p.image ? (
-                                    <img src={p.image} alt="Post" className="w-full h-full object-cover group-hover:scale-105 transition duration-300"/>
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center p-4 text-center font-serif text-gray-500 bg-white border border-gray-100">
-                                        <span className="text-[10px] md:text-sm line-clamp-3">"{p.content}"</span>
+                        (activeTab === 'posts' ? userPosts : savedPosts).map(p => {
+                            // --- COLOR LOGIC FOR GRID ---
+                            const finalBg = p.bgColor || (p.background && (p.background.startsWith('#') || p.background.includes('gradient')) ? p.background : '#f3f4f6');
+                            const finalText = p.textColor || '#000000';
+
+                            return (
+                                <div 
+                                    key={p.id} 
+                                    className="aspect-square relative group cursor-pointer overflow-hidden rounded-sm md:rounded-lg" 
+                                    style={{ background: finalBg }}
+                                    onClick={() => onPostClick && onPostClick(p.id)}
+                                >
+                                    <div className="absolute inset-0 flex items-center justify-center p-2 text-center">
+                                        <p 
+                                            className="font-serif font-medium text-[10px] md:text-sm line-clamp-4 leading-tight pointer-events-none"
+                                            style={{ color: finalText }}
+                                        >
+                                            {p.content}
+                                        </p>
                                     </div>
-                                )}
-                                <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2 text-white font-bold">
-                                    <span className="flex items-center gap-1"><Grid size={16} /></span>
+
+                                    {/* Hover Overlay with Stats */}
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-4 text-white font-bold backdrop-blur-[1px]">
+                                        <span className="flex items-center gap-1"><Heart size={18} fill="white" /> {p.likes || 0}</span>
+                                        <span className="flex items-center gap-1"><MessageCircle size={18} fill="white" /> {p.commentCount || 0}</span>
+                                    </div>
                                 </div>
-                            </div>
-                        ))
+                            );
+                        })
                     ) : (
                         <div className="col-span-3 py-20 flex flex-col items-center justify-center text-gray-400">
                             <Grid size={40} className="mb-2 opacity-20"/>

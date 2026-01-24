@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Home, PlusSquare, Search, User, MessageCircle, Heart, Menu, Instagram, Send, Phone, PhoneOff, Video, X } from 'lucide-react'; 
+import { Home, PlusSquare, Search, User, MessageCircle, Heart, Menu, Send, Phone, PhoneOff, Video, X } from 'lucide-react'; 
 import { db, auth } from './firebase'; 
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, getDocs } from 'firebase/firestore'; 
 import { signOut } from 'firebase/auth';
@@ -31,13 +31,14 @@ function App() {
   const [userPhotoURL, setUserPhotoURL] = useState(null); 
   const [view, setView] = useState(localStorage.getItem('shayari_current_view') || "home");
   
-  // ⚡ New State for Account Switching Feature
+  // Account Switch State
   const [isSwitchingAccount, setIsSwitchingAccount] = useState(false);
 
   // Navigation State
   const [viewingProfile, setViewingProfile] = useState(localStorage.getItem('shayari_last_profile') || null); 
   const [viewingPostId, setViewingPostId] = useState(null);
   const [activeChatId, setActiveChatId] = useState(null);
+  const [editPostData, setEditPostData] = useState(null); 
   
   const [history, setHistory] = useState([]);
   const [hasUnreadMsg, setHasUnreadMsg] = useState(false);
@@ -45,7 +46,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNotificationsDesktop, setShowNotificationsDesktop] = useState(false);
 
-  // --- CALL STATES ---
+  // Call States
   const [incomingCall, setIncomingCall] = useState(null); 
   const [activeCallSession, setActiveCallSession] = useState(null);
 
@@ -78,7 +79,6 @@ function App() {
 
     setOnlineStatus(true);
 
-    // ⚡ Fetch Profile Pic (Defaults to null if missing)
     const userDocRef = doc(db, "users", currentUser);
     const unsubUser = onSnapshot(userDocRef, (docSnap) => {
         if (docSnap.exists()) {
@@ -144,8 +144,9 @@ function App() {
       setIncomingCall(null);
   };
 
+  // ⚡ FIXED: Simplified pushToHistory to ensure back button works correctly from Single Post -> Chat
   const pushToHistory = () => {
-    setHistory(prev => [...prev, { view, viewingProfile, viewingPostId, activeChatId }]);
+      setHistory(prev => [...prev, { view, viewingProfile, viewingPostId, activeChatId }]);
   };
 
   const handleBack = () => {
@@ -161,10 +162,17 @@ function App() {
     }
   };
 
-  const handleNav = (targetView, profileName = null, chatId = null, postId = null) => {
-    if (view === targetView && targetView !== 'profile' && targetView !== 'chat') return;
+  const handleNav = (targetView, profileName = null, chatId = null, postId = null, postData = null) => {
     setShowNotificationsDesktop(false);
-    pushToHistory();
+    
+    // Save history unless we are just tapping same tab
+    if (view !== targetView) {
+        pushToHistory();
+    } else if (targetView === 'profile' && profileName !== viewingProfile) {
+        // Exception: Navigating from Profile A to Profile B needs history
+        pushToHistory();
+    }
+
     if (profileName) setViewingProfile(profileName);
     
     if (chatId !== undefined) {
@@ -174,14 +182,20 @@ function App() {
     }
 
     if (postId) setViewingPostId(postId);
+    
+    if (targetView === 'edit' && postData) {
+        setEditPostData(postData);
+    } else if (targetView === 'post') {
+        setEditPostData(null); 
+    }
+
     setView(targetView);
-    window.scrollTo(0, 0);
   };
 
   const handleLogin = (username) => {
     setCurrentUser(username);
     localStorage.setItem('shayari_user', username);
-    setIsSwitchingAccount(false); // ⚡ Close switch mode on successful login
+    setIsSwitchingAccount(false); 
   };
 
   const handleLogout = async () => {
@@ -205,27 +219,25 @@ function App() {
   };
 
   const SidebarItem = ({ icon: Icon, label, isActive, onClick, alert, imgSrc }) => (
-    <button onClick={onClick} className={`flex items-center p-3 rounded-xl w-full transition-all duration-300 group/item ${isActive ? 'font-bold' : 'hover:bg-gray-50 font-normal'}`}>
-      <div className="relative flex items-center justify-center w-8 h-8 shrink-0">
-        {/* ⚡ Updated Logic: Show Image if imgSrc exists OR label is Profile (defaults to favicon) */}
+    <button onClick={onClick} className={`flex items-center gap-4 p-3 rounded-xl w-full transition-all duration-300 group ${isActive ? 'bg-gray-100 font-bold' : 'hover:bg-gray-50 font-normal'}`}>
+      <div className="relative flex items-center justify-center w-7 h-7 shrink-0">
         {label === 'Profile' ? (
             <img 
                 src={imgSrc || "/favicon.png"} 
                 alt="Profile" 
-                className={`w-7 h-7 rounded-full object-cover border transition-transform group-hover/item:scale-110 ${isActive ? 'border-black border-2' : 'border-transparent'}`} 
+                className={`w-7 h-7 rounded-full object-cover border transition-transform group-hover:scale-110 ${isActive ? 'border-black border-2' : 'border-gray-200'}`} 
             />
         ) : (
-            <Icon size={26} strokeWidth={isActive ? 2.8 : 2} className={`transition-transform group-hover/item:scale-110 ${isActive ? 'text-black' : 'text-gray-800'}`} />
+            <Icon size={26} strokeWidth={isActive ? 2.8 : 2} className={`transition-transform group-hover:scale-110 ${isActive ? 'text-black' : 'text-gray-800'}`} />
         )}
         {alert && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
       </div>
-      <span className={`whitespace-nowrap overflow-hidden opacity-0 w-0 group-hover/sidebar:w-auto group-hover/sidebar:opacity-100 group-hover/sidebar:pl-4 transition-all duration-300 ease-in-out text-base ${isActive ? 'text-black' : 'text-gray-800'}`}>
+      <span className={`hidden xl:block text-base ${isActive ? 'text-black' : 'text-gray-800'}`}>
         {label}
       </span>
     </button>
   );
 
-  // ⚡ Updated Login Render Logic: Shows login if no user OR if switching account
   if (!currentUser || isSwitchingAccount) {
       return (
         <Login 
@@ -238,7 +250,7 @@ function App() {
   const isFullScreenMobile = view === 'chat' && activeChatId;
 
   return (
-    <div className="min-h-screen bg-white text-gray-900 font-sans flex flex-col md:flex-row">
+    <div className="flex h-screen bg-white text-gray-900 font-sans overflow-hidden">
       
       {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onLogout={handleLogout} />}
       
@@ -252,6 +264,7 @@ function App() {
         />
       )}
 
+      {/* Incoming Call Overlay */}
       <AnimatePresence>
         {incomingCall && !activeCallSession && (
             <motion.div initial={{ y: -100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -100, opacity: 0 }} className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-white border border-gray-200 shadow-2xl rounded-2xl p-4 w-[350px] flex items-center justify-between">
@@ -267,50 +280,42 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* --- DESKTOP SIDEBAR --- */}
-      <div className="hidden md:flex flex-col h-screen fixed left-0 top-0 z-50 bg-white px-3 py-8 justify-between w-[80px] hover:w-[260px] transition-all duration-300 ease-in-out group/sidebar">
-        <div className="space-y-2">
-            {/* LOGO */}
-            <div className="flex items-center p-3 mb-8 cursor-pointer w-full group/item" onClick={() => handleNav('home')}>
-                <div className="relative flex items-center justify-center w-8 h-8 shrink-0">
-                    <img src="/logo.png" alt="ShayariGram" className="h-8 w-8 object-contain" />
+      {/* --- DESKTOP LEFT NAVBAR --- */}
+      <aside className="hidden md:flex flex-col w-[80px] xl:w-[250px] border-r border-gray-200 h-full bg-white z-20 transition-all duration-300">
+        <div className="flex flex-col justify-between h-full py-8 px-3 xl:px-6">
+            <div className="space-y-6">
+                <div className="flex items-center gap-3 pl-2 cursor-pointer mb-8" onClick={() => handleNav('home')}>
+                    <img src="/logo.png" alt="Logo" className="h-8 w-8 object-contain" />
+                    <span className="hidden xl:block font-bold text-xl tracking-tight">ShayariGram</span>
                 </div>
+                
+                <SidebarItem icon={Home} label="Home" isActive={view === 'home'} onClick={() => handleNav('home')} />
+                <SidebarItem icon={Search} label="Search" isActive={view === 'explore'} onClick={() => handleNav('explore')} />
+                <SidebarItem icon={MessageCircle} label="Messages" isActive={view === 'chat'} onClick={() => handleNav('chat', null, null)} alert={hasUnreadMsg} />
+                <SidebarItem icon={Heart} label="Notifications" isActive={showNotificationsDesktop} onClick={() => setShowNotificationsDesktop(!showNotificationsDesktop)} alert={hasUnreadNotif} />
+                <SidebarItem icon={PlusSquare} label="Create" isActive={view === 'post'} onClick={() => handleNav('post')} />
+                <SidebarItem 
+                    icon={User} label="Profile" 
+                    isActive={view === 'profile' && viewingProfile === currentUser} 
+                    onClick={() => handleNav('profile', currentUser)} 
+                    imgSrc={userPhotoURL || "/favicon.png"} 
+                />
             </div>
-            
-            <SidebarItem icon={Home} label="Home" isActive={view === 'home'} onClick={() => handleNav('home')} />
-            <SidebarItem icon={MessageCircle} label="Messages" isActive={view === 'chat'} onClick={() => handleNav('chat', null, null)} alert={hasUnreadMsg} />
-            <SidebarItem icon={Search} label="Search" isActive={view === 'explore'} onClick={() => handleNav('explore')} />
-            <SidebarItem icon={Heart} label="Notifications" isActive={showNotificationsDesktop} onClick={() => setShowNotificationsDesktop(!showNotificationsDesktop)} alert={hasUnreadNotif} />
-            <SidebarItem icon={PlusSquare} label="Create" isActive={view === 'post'} onClick={() => handleNav('post')} />
-            
-            {/* ⚡ Profile Item with Default Favicon */}
-            <SidebarItem 
-                icon={User} 
-                label="Profile" 
-                isActive={view === 'profile' && viewingProfile === currentUser} 
-                onClick={() => handleNav('profile', currentUser)} 
-                imgSrc={userPhotoURL || "/favicon.png"} 
-            />
+            <div className="space-y-2"><SidebarItem icon={Menu} label="More" onClick={() => setShowSettings(true)} /></div>
         </div>
-        
-        <div><SidebarItem icon={Menu} label="More" onClick={() => setShowSettings(true)} /></div>
-      </div>
+      </aside>
 
-      {/* --- 📱 MOBILE TOP HEADER --- */}
-      {!isFullScreenMobile && view !== 'chat' && view !== 'post' && view !== 'notifications' && (
+      {/* --- MOBILE TOP HEADER --- */}
+      {!isFullScreenMobile && view !== 'chat' && view !== 'post' && view !== 'notifications' && view !== 'edit' && (
         <div className="md:hidden fixed top-0 w-full h-[60px] border-b border-gray-200 bg-white z-40 px-4 shadow-sm grid grid-cols-3 items-center">
-            <div className="flex justify-start">
-                <img src="/logo.png" alt="ShayariGram" className="h-8 w-auto" />
-            </div>
+            <div className="flex justify-start"><img src="/logo.png" alt="ShayariGram" className="h-8 w-auto" /></div>
             <div></div>
             <div className="flex items-center justify-end gap-5">
                 <button onClick={() => handleNav('notifications')} className="relative">
-                    <Heart size={26} className="text-gray-800" />
-                    {hasUnreadNotif && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
+                    <Heart size={26} className="text-gray-800" />{hasUnreadNotif && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
                 </button>
                 <button onClick={() => handleNav('chat', null, null)} className="relative">
-                    <MessageCircle size={26} className="text-gray-800" />
-                    {hasUnreadMsg && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] text-white flex items-center justify-center">1</span>}
+                    <MessageCircle size={26} className="text-gray-800" />{hasUnreadMsg && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] text-white flex items-center justify-center">1</span>}
                 </button>
             </div>
         </div>
@@ -318,39 +323,39 @@ function App() {
 
       <AnimatePresence>
         {showNotificationsDesktop && (
-            <motion.div initial={{ x: -400, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -400, opacity: 0 }} className="hidden md:block fixed left-[80px] lg:left-[245px] top-0 h-screen w-[400px] bg-white border-r border-gray-200 z-40 shadow-2xl overflow-hidden rounded-r-3xl">
-                <div className="p-6">
-                    <h2 className="text-2xl font-bold font-serif mb-6">Notifications</h2>
-                    <div className="h-[80vh] overflow-y-auto scrollbar-hide">
-                        <Notifications currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onProfileClick={(uid) => handleNav('profile', uid)} />
-                    </div>
-                </div>
+            <motion.div initial={{ x: -100, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -100, opacity: 0 }} className="hidden md:block absolute left-[80px] xl:left-[250px] top-0 h-full w-[400px] bg-white border-r border-gray-200 z-30 shadow-2xl overflow-hidden">
+                <div className="p-6 h-full flex flex-col"><h2 className="text-2xl font-bold font-serif mb-6">Notifications</h2><div className="flex-1 overflow-y-auto scrollbar-hide"><Notifications currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onProfileClick={(uid) => handleNav('profile', uid)} /></div></div>
             </motion.div>
         )}
       </AnimatePresence>
 
       {/* --- MAIN CONTENT AREA --- */}
-      <div className={`flex-1 md:ml-[80px] lg:ml-[245px] bg-white min-h-screen transition-all duration-300 ${isFullScreenMobile || view === 'post' || view === 'notifications' ? 'pt-0 pb-0' : 'pt-[65px] pb-[65px] md:pt-0 md:pb-0'}`}>
-        <div className="w-full h-full flex justify-center"> 
+      <main className={`flex-1 h-full overflow-y-auto relative scroll-smooth bg-white ${isFullScreenMobile || view === 'post' || view === 'edit' || view === 'notifications' ? 'pt-0 pb-0' : 'pt-[60px] pb-[60px] md:pt-0 md:pb-0'}`}>
+        <div className="w-full min-h-full flex justify-center"> 
             <AnimatePresence mode="wait">
                 {view === "home" && (
                   <motion.div key="home" initial="initial" animate="in" exit="out" variants={pageVariants} transition={pageTransition} className="w-full max-w-[600px] py-4 md:py-8 px-2 md:px-0">
                     <Dashboard />
                     <div className="mt-6">
-                        <ShayariFeed onProfileClick={(uid) => handleNav('profile', uid)} onPostClick={(id) => handleNav('singlePost', null, null, id)} />
+                        <ShayariFeed 
+                            onProfileClick={(uid) => handleNav('profile', uid)} 
+                            onPostClick={(id) => handleNav('singlePost', null, null, id)} 
+                            onEditClick={(post) => handleNav('edit', null, null, null, post)}
+                        />
                     </div>
                   </motion.div>
                 )}
 
-                {view === "explore" && <motion.div key="explore" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-6 px-2 w-full max-w-4xl"><Explore onProfileClick={(uid) => handleNav('profile', uid)} /></motion.div>}
+                {view === "explore" && <motion.div key="explore" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-6 px-2 w-full max-w-4xl"><Explore onProfileClick={(uid) => handleNav('profile', uid)} onPostClick={(id) => handleNav('singlePost', null, null, id)} /></motion.div>}
                 
                 {view === "post" && <motion.div key="post" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><PostShayari username={currentUser} onBack={handleBack} /></div></motion.div>}
+
+                {view === "edit" && <motion.div key="edit" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><PostShayari username={currentUser} onBack={handleBack} editData={editPostData} /></div></motion.div>}
                 
                 {view === "profile" && <motion.div key="profile" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-8 px-0 w-full max-w-4xl"><ProfilePage profileUser={viewingProfile} currentUser={currentUser} onBack={handleBack} onPostClick={(id) => handleNav('singlePost', null, null, id)} onNavigateToChat={(chatId) => handleNav('chat', null, chatId)} onProfileClick={(uid) => handleNav('profile', uid)} onLogout={handleLogout} /></motion.div>}
                 
                 {view === "notifications" && <motion.div key="notifications" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:hidden w-full"><Notifications currentUser={currentUser} onPostClick={(id) => handleNav('singlePost', null, null, id)} onProfileClick={(uid) => handleNav('profile', uid)} onBack={handleBack} /></motion.div>}
                 
-                {/* ⚡ Pass onSwitchAccount trigger to ChatPage */}
                 {view === "chat" && (
                     <motion.div key="chat" initial="initial" animate="in" exit="out" variants={pageVariants} className="h-full w-full md:p-6 max-w-6xl">
                         <ChatPage 
@@ -360,34 +365,25 @@ function App() {
                             onChatSelect={(id) => setActiveChatId(id)}
                             onCallStart={(callId, type) => setActiveCallSession({ id: callId, isCaller: true, type: type })} 
                             onSwitchAccount={() => setIsSwitchingAccount(true)}
+                            onPostClick={(id) => handleNav('singlePost', null, null, id)} 
                         />
                     </motion.div>
                 )}
                 
-                {view === "singlePost" && <motion.div key="singlePost" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><SinglePostView postId={viewingPostId} onBack={handleBack} onProfileClick={(uid) => handleNav('profile', uid)} /></div></motion.div>}
+                {view === "singlePost" && <motion.div key="singlePost" initial="initial" animate="in" exit="out" variants={pageVariants} className="md:py-10 px-4 w-full max-w-xl flex justify-center"><div className="w-full"><SinglePostView postId={viewingPostId} onBack={handleBack} onProfileClick={(uid) => handleNav('profile', uid)} onEditClick={(post) => handleNav('edit', null, null, null, post)} /></div></motion.div>}
             </AnimatePresence>
         </div>
-      </div>
+      </main>
 
-      {/* --- MOBILE BOTTOM NAV --- */}
       {!isFullScreenMobile && (
         <div className="md:hidden fixed bottom-0 w-full h-[60px] border-t border-gray-200 bg-white z-40 flex justify-around items-center pb-safe">
           <NavButton icon={Home} isActive={view === 'home'} onClick={() => handleNav("home")} />
           <NavButton icon={Search} isActive={view === 'explore'} onClick={() => handleNav("explore")} />
           <NavButton icon={PlusSquare} isActive={view === 'post'} onClick={() => handleNav("post")} />
-          
-          <button onClick={() => handleNav("profile", currentUser)} className={`rounded-full p-0.5 border-2 ${view === 'profile' && viewingProfile === currentUser ? 'border-black' : 'border-transparent'}`}>
-             {/* ⚡ Mobile Fallback to Favicon */}
-             <img 
-                src={userPhotoURL || "/favicon.png"} 
-                alt="Profile" 
-                className="w-7 h-7 rounded-full object-cover border border-gray-200" 
-             />
-          </button>
+          <button onClick={() => handleNav("profile", currentUser)} className={`rounded-full p-0.5 border-2 ${view === 'profile' && viewingProfile === currentUser ? 'border-black' : 'border-transparent'}`}><img src={userPhotoURL || "/favicon.png"} alt="Profile" className="w-7 h-7 rounded-full object-cover border border-gray-200" /></button>
         </div>
       )}
 
-      {/* --- DESKTOP FLOATING MSG BTN --- */}
       {!isFullScreenMobile && view !== 'chat' && (
         <div className="hidden md:flex fixed bottom-10 right-10 z-[60]">
             <button onClick={() => handleNav('chat', null, null)} className="flex items-center gap-3 bg-white text-black px-6 py-3.5 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-gray-100 hover:shadow-xl hover:scale-105 transition duration-300 group">

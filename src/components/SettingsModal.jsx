@@ -1,24 +1,31 @@
-// File: src/components/SettingsModal.jsx
 import { useState, useEffect } from 'react';
 import { 
   X, Lock, Activity, Heart, Image as ImageIcon, ExternalLink, 
   Loader2, Mail, ShieldAlert, ChevronRight, Settings, Bookmark, 
-  MessageSquare, Repeat, LogOut, ArrowLeft, Eye, EyeOff, Users 
+  MessageSquare, Repeat, LogOut, ArrowLeft, Eye, EyeOff, Users, Send, AlertTriangle, CheckCircle 
 } from 'lucide-react';
 import { db, auth } from '../firebase'; 
 import { collection, query, where, getDocs, doc, getDoc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail, deleteUser } from 'firebase/auth'; 
 import { isAdmin } from '../adminConfig'; 
+import emailjs from '@emailjs/browser'; // ⚡ Import EmailJS
 
 const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick, onLogout }) => {
-  const [currentView, setCurrentView] = useState('menu');
+  const [currentView, setCurrentView] = useState('menu'); // 'menu', 'security', 'activity', 'saved', 'report'
   const [likedPosts, setLikedPosts] = useState([]);
   const [savedPosts, setSavedPosts] = useState([]);
   const [loading, setLoading] = useState(false);
+  
+  // Settings States
   const [resetMessage, setResetMessage] = useState("");
   const [allowUserDelete, setAllowUserDelete] = useState(true);
   const [loadingDelete, setLoadingDelete] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
+  
+  // Report Problem State
+  const [reportText, setReportText] = useState("");
+  const [isSendingReport, setIsSendingReport] = useState(false); // Loading state
+  const [reportSent, setReportSent] = useState(false); // Success state
   
   const isSystemAdmin = isAdmin(currentUser);
 
@@ -26,6 +33,8 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick, onLogout }) 
     if (isOpen) {
         setCurrentView('menu'); 
         setResetMessage("");
+        setReportText(""); 
+        setReportSent(false);
         fetchGlobalSettings();
         fetchUserSettings();
     }
@@ -112,9 +121,52 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick, onLogout }) 
     } finally { setLoadingDelete(false); }
   };
 
-  const MenuItem = ({ icon: Icon, label, onClick, isDestructive = false }) => (
+  // ⚡ DIRECT SEND LOGIC (EmailJS)
+  const handleSendReport = async () => {
+      if (!reportText.trim()) return;
+      setIsSendingReport(true);
+
+      // Define parameters matching your EmailJS template variables
+      const templateParams = {
+          from_name: currentUser,           // The username of the person reporting
+          user_email: auth.currentUser?.email || "No email", // User's email if available
+          message: reportText,              // The problem description
+          to_email: 'abizersaifee5253@gmail.com' // ⚡ Target email
+      };
+
+      try {
+          // ⚠️ REPLACE 'YOUR_SERVICE_ID', 'YOUR_TEMPLATE_ID', 'YOUR_PUBLIC_KEY' 
+          // with the actual values from your EmailJS Account Dashboard.
+          await emailjs.send(
+              'YOUR_SERVICE_ID',   // e.g. 'service_gmail'
+              'YOUR_TEMPLATE_ID',  // e.g. 'template_report'
+              templateParams,
+              'YOUR_PUBLIC_KEY'    // e.g. 'user_123456789'
+          );
+          
+          setReportSent(true);
+          setReportText("");
+          
+          // Auto close modal after 2 seconds on success
+          setTimeout(() => {
+              setReportSent(false);
+              onClose();
+          }, 2500);
+          
+      } catch (error) {
+          console.error('EmailJS Error:', error);
+          alert("Failed to send report. Please check your internet connection.");
+      } finally {
+          setIsSendingReport(false);
+      }
+  };
+
+  const MenuItem = ({ icon: Icon, label, onClick, isDestructive = false, color }) => (
       <button onClick={onClick} className={`w-full flex items-center justify-between p-4 hover:bg-gray-50 transition border-b border-gray-50 last:border-0 ${isDestructive ? 'text-red-500' : 'text-gray-800'}`}>
-          <div className="flex items-center gap-4"><Icon size={22} strokeWidth={1.5} /><span className="text-[15px] font-medium">{label}</span></div>
+          <div className="flex items-center gap-4">
+              <Icon size={22} strokeWidth={1.5} className={color || ""} />
+              <span className="text-[15px] font-medium">{label}</span>
+          </div>
           {!isDestructive && <ChevronRight size={18} className="text-gray-400" />}
       </button>
   );
@@ -131,7 +183,10 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick, onLogout }) 
         <div className="px-4 py-3 border-b border-gray-100 flex items-center bg-white sticky top-0 z-20">
             {currentView !== 'menu' && (<button onClick={() => setCurrentView('menu')} className="mr-3 p-1 rounded-full hover:bg-gray-100 transition"><ArrowLeft size={22} className="text-gray-800" /></button>)}
             <h2 className="text-lg font-bold font-serif text-gray-800 flex-1 text-center pr-8">
-                {currentView === 'menu' ? 'Settings' : currentView === 'security' ? 'Security' : currentView === 'activity' ? 'Your Activity' : 'Saved'}
+                {currentView === 'menu' ? 'Settings' : 
+                 currentView === 'security' ? 'Security' : 
+                 currentView === 'activity' ? 'Your Activity' : 
+                 currentView === 'saved' ? 'Saved' : 'Report Problem'}
             </h2>
             {currentView === 'menu' && (<button onClick={onClose} className="p-1 rounded-full hover:bg-gray-100"><X size={22} className="text-gray-800" /></button>)}
         </div>
@@ -145,21 +200,12 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick, onLogout }) 
                         <MenuItem icon={Settings} label="Settings & Security" onClick={() => setCurrentView('security')} />
                         <MenuItem icon={Activity} label="Your Activity" onClick={() => { fetchLikedPosts(); setCurrentView('activity'); }} />
                         <MenuItem icon={Bookmark} label="Saved" onClick={() => { fetchSavedPosts(); setCurrentView('saved'); }} />
-                        <MenuItem icon={MessageSquare} label="Report a problem" onClick={() => alert("Reporting coming soon!")} />
+                        <MenuItem icon={MessageSquare} label="Report a problem" onClick={() => setCurrentView('report')} color="text-orange-500" />
                     </div>
                     <div className="h-2 bg-gray-50 border-t border-b border-gray-100"></div>
                     <div className="py-2">
-                        <MenuItem 
-                            icon={Repeat} 
-                            label="Switch accounts" 
-                            onClick={() => { onClose(); if(onLogout) onLogout(); }} 
-                        />
-                        <MenuItem 
-                            icon={LogOut} 
-                            label="Log out" 
-                            isDestructive 
-                            onClick={() => { onClose(); if(onLogout) onLogout(); }} 
-                        />
+                        <MenuItem icon={Repeat} label="Switch accounts" onClick={() => { onClose(); if(onLogout) onLogout(); }} />
+                        <MenuItem icon={LogOut} label="Log out" isDestructive onClick={() => { onClose(); if(onLogout) onLogout(); }} />
                     </div>
                 </div>
             )}
@@ -174,7 +220,6 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick, onLogout }) 
                         <button onClick={handleTogglePrivacy} className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 ${isPrivate ? 'bg-black' : 'bg-gray-300'}`}><div className={`w-4 h-4 bg-white rounded-full shadow transition-transform duration-300 ${isPrivate ? 'translate-x-5' : 'translate-x-0'}`} /></button>
                     </div>
                     
-                    {/* Security Reset */}
                     <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100 text-center">
                         <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3"><Lock size={24} /></div>
                         <h3 className="font-bold text-gray-900 mb-1">Login Security</h3>
@@ -225,6 +270,52 @@ const SettingsModal = ({ isOpen, onClose, currentUser, onPostClick, onLogout }) 
                             ))}
                         </div>
                     ) : <div className="text-center py-20 text-gray-400"><Bookmark size={40} className="mx-auto mb-2 opacity-20"/><p className="text-sm">No saved posts.</p></div>}
+                </div>
+            )}
+
+            {/* ⚡ REPORT PROBLEM VIEW */}
+            {currentView === 'report' && (
+                <div className="p-6 h-full flex flex-col relative">
+                    <div className="flex items-start gap-3 p-4 bg-orange-50 text-orange-800 rounded-xl mb-6">
+                        <AlertTriangle size={20} className="shrink-0 mt-0.5" />
+                        <p className="text-xs leading-relaxed">
+                            Found a bug or having trouble? Describe the issue below and we'll fix it instantly.
+                        </p>
+                    </div>
+
+                    {reportSent ? (
+                        <div className="absolute inset-0 bg-white flex flex-col items-center justify-center z-20 animate-fade-in">
+                            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+                                <CheckCircle size={32} className="text-green-600" />
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900">Report Sent!</h3>
+                            <p className="text-gray-500 text-sm mt-2 text-center px-8">Thank you for letting us know. We've received your email.</p>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="flex-1">
+                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Describe the issue</label>
+                                <textarea 
+                                    value={reportText}
+                                    onChange={(e) => setReportText(e.target.value)}
+                                    placeholder="e.g. My chat messages aren't loading..."
+                                    className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none transition"
+                                />
+                            </div>
+
+                            <button 
+                                onClick={handleSendReport}
+                                disabled={!reportText.trim() || isSendingReport}
+                                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed mt-4 shadow-md"
+                            >
+                                {isSendingReport ? (
+                                    <>Sending <Loader2 size={18} className="animate-spin"/></>
+                                ) : (
+                                    <>Send Report <Send size={18} /></>
+                                )}
+                            </button>
+                        </>
+                    )}
                 </div>
             )}
 
