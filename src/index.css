@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  /* Define the ColorHunt Palette */
+  --color-dark-bg: #222831;      /* Main Background */
+  --color-dark-card: #393e46;    /* Cards / Sidebar */
+  --color-teal-accent: #00adb5;  /* Buttons / Accents */
+  --color-light-text: #eeeeee;   /* Text */
+}
+
+@layer base {
+  body {
+    background-color: var(--color-dark-bg);
+    color: var(--color-light-text);
+  }
+}
+
+@layer utilities {
+  .animation-delay-2000 {
+    animation-delay: 2s;
+  }
+  .animation-delay-4000 {
+    animation-delay: 4s;
+  }
+}
+
+/* Blob Animation */
+@keyframes blob {
+  0% { transform: translate(0px, 0px) scale(1); }
+  33% { transform: translate(50px, -60px) scale(1.2); }
+  66% { transform: translate(-40px, 30px) scale(0.85); }
+  100% { transform: translate(0px, 0px) scale(1); }
+}
+
+.animate-blob {
+  animation: blob 10s infinite cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 0.7;
+}
