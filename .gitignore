@@ -1,4 +1,13 @@
-# Logs
+# --- System Files ---
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# --- Logs ---
 logs
 *.log
 npm-debug.log*
@@ -7,18 +16,38 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# --- Dependencies ---
+node_modules/
+jspm_packages/
+
+# --- Build Outputs ---
+dist/
+dist-ssr/
+build/
+out/
+
+# --- Environment Variables (CRITICAL) ---
+# Never track your Firebase keys or secret configs
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 *.local
 
-# Editor directories and files
+# --- Editor Specific ---
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# --- Firebase ---
+# If you use Firebase CLI, ignore these temporary files
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+
+# --- Testing ---
+/coverage
